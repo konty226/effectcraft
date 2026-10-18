@@ -89,19 +89,23 @@ Encore sans réponse, et à trancher plus tard (ça ne bloque pas les phases 0 e
 
 Estimations en heures de travail avec Claude (agent), pour une personne qui pilote et valide.
 
-### Phase 0 — Mise en route en mode live (≈ 3–6 h) · *à faire tout de suite*
+### Phase 0 — Mise en route en mode live · ✅ faite le 18 octobre 2026
 
-- [ ] Installer **rustup** (stable ≥ 1.95, `x86_64-pc-windows-msvc`) et **Visual Studio Build Tools** (C++).
-- [ ] `cargo build --release -p effectcraft -p effectcraft-cli`.
-- [ ] Lancer `effectcraft.exe --control 9877 --demo` ; tester le **compositeur GPU sous Windows** (risque #613 sur Direct3D 12) ; si ça plante, trouver le réglage CPU / Vulkan et le noter.
-- [ ] Créer `D:\MotionProjects\` (projets, médias, rendus).
-- [ ] Config Claude (Claude Desktop et Claude Code) sur le **binaire compilé** (pas `cargo run`) :
-  - `effectcraft-app` (principal) : `effectcraft-cli.exe mcp --bridge 9877` ;
-  - `effectcraft` (secours headless, rendus) : `effectcraft-cli.exe mcp --autosave --automation-read-root D:\MotionProjects --automation-write-root D:\MotionProjects\out`.
-- [ ] Raccourci Windows « App + Claude » qui lance l'app avec `--control 9877`.
-- [ ] Test complet en direct : Claude crée un titre vertical 1080×1920 de 4 s pendant que je regarde, puis exporte MP4, WebM alpha et GIF.
+- [x] Visual Studio 2022 Build Tools (C++) et Rust 1.99.1 (`stable-x86_64-pc-windows-msvc`) installés via winget.
+- [x] `cargo build --release -p effectcraft -p effectcraft-cli` : **46 min** au premier build (12 threads, 16 Go). Binaires de ≈ 88 Mo dans `targetelease\`.
+- [x] App lancée avec `--control 9877` : GPU **NVIDIA RTX 2060 sur Vulkan** (pas Direct3D 12, donc le bug #613 ne s'applique pas ici).
+- [x] `D:\MotionProjects\` créé (`projets\`, `medias\`, `out\`) avec :
+  - `.mcp.json` : `effectcraft-app` (bridge, port 9877, mode principal) et `effectcraft` (headless, `--autosave`, confiné à `D:\MotionProjects`) ;
+  - `Lancer EffectCraft (live Claude).cmd` : ouvre l'app avec le canal de contrôle.
+  - Ouvrir une session Claude Code dans `D:\MotionProjects` pour avoir les outils.
+- [x] Test complet via MCP bridge : comp 1080×1920, titre + sous-titre animés (échelle avec overshoot, fondus, glissement) créés **en direct dans la fenêtre**, `render_frame` et `screenshot` OK, projet sauvegardé.
+- [x] Exports depuis la CLI headless (4 s, 1080×1920) : **MP4 H.264 en 8 s**, **GIF** 540×960 15 i/s en 2 s, **WebM VP9 + alpha en 108 s** (piste alpha vérifiée).
 
-**Critère de sortie** : je vois Claude construire l'animation dans la fenêtre, et les 3 exports fonctionnent sous Windows.
+**Constats pour la suite**
+- Le serveur MCP **rejette tout argument inconnu** (strict) : bon pour la fiabilité, à rappeler dans le skill.
+- `fauxBold` sur `layer.newText` n'a pas épaissi Inter → utiliser un vrai style (`style: "Bold"`) ; à vérifier dans le skill.
+- Le **WebM VP9 est lent** (≈ 27 s par seconde de vidéo 1080×1920) : rendre en WebM seulement pour la version finale, tester `--webm-codec av1` et la résolution moitié pour les essais.
+- Rendre depuis la CLI headless sur le `.ecproj` sauvegardé évite de bloquer l'app pendant l'export.
 
 ### Phase 1 — MVP « on anime à deux, en direct » (≈ 20–35 h)
 
