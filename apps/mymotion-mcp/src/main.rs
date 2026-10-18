@@ -15,6 +15,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod b64;
+mod brand;
 mod draw;
 mod tools;
 
@@ -48,7 +49,10 @@ pub struct Proxy {
     pending: Mutex<HashMap<String, Sender<Value>>>,
     merges: Mutex<HashMap<String, Merge>>,
     next: AtomicU64,
-    pub brand: Option<PathBuf>,
+    /// Brand kits (studio, per client, per project), from `--brand`.
+    pub brands: Option<brand::Brands>,
+    /// Client chosen with `brand_use` for this session (else detected from the project's folder).
+    pub client: Mutex<Option<String>>,
     pub checkpoints: Mutex<Vec<tools::Checkpoint>>,
 }
 
@@ -267,7 +271,8 @@ fn serve() -> Result<(), String> {
         pending: Mutex::new(HashMap::new()),
         merges: Mutex::new(HashMap::new()),
         next: AtomicU64::new(1),
-        brand: args.brand,
+        brands: args.brand.map(brand::Brands::new),
+        client: Mutex::new(None),
         checkpoints: Mutex::new(Vec::new()),
     });
 

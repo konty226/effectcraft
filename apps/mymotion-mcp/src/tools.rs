@@ -1,10 +1,13 @@
 //! The motion-design tools this proxy adds, built on EffectCraft's own MCP tools.
 
+use std::path::{Path, PathBuf};
+
 use serde_json::{Map, Value, json};
 
+use crate::brand::{self, Brands};
 use crate::{Proxy, b64, draw, lock};
 
-pub const INSTRUCTIONS: &str = "mymotion tools (motion design with Claude): render_filmstrip shows a stretch of the animation as a captioned contact sheet, so judge timing and spacing on it rather than on one frame. plot_curves draws a property's value and speed over time with its keyframes and reports overshoot and peak speed, to judge easing. focus_context returns what the user is looking at in the live app (active comp, current time, selected layers, properties and keys) plus an image, call it first when the user says \"this\" or \"the selected layer\". checkpoint {label} before a large change, restore_checkpoint {label} to go back. brand_kit (also resource mymotion://brand) returns the user's colours, fonts and timing rules: follow it.";
+pub const INSTRUCTIONS: &str = "mymotion tools (motion design with Claude): render_filmstrip shows a stretch of the animation as a captioned contact sheet, so judge timing and spacing on it rather than on one frame. plot_curves draws a property's value and speed over time with its keyframes and reports overshoot and peak speed, to judge easing. focus_context returns what the user is looking at in the live app (active comp, current time, selected layers, properties and keys) plus an image, call it first when the user says \"this\" or \"the selected layer\". checkpoint {label} before a large change, restore_checkpoint {label} to go back. brand_kit (also resource mymotion://brand) returns the brand kit to follow (colours, fonts, timing), merged studio -> client -> project; the user has several clients: check `client` in its reply, switch with brand_use, list with brand_list, create one with brand_new, and save each client's projects under clients/<client>/projets/ so the right kit applies.";
 
 pub struct Checkpoint {
     pub label: String,
@@ -99,10 +102,39 @@ const DEFS: &[Def] = &[
     Def {
         name: "brand_kit",
         title: "Brand kit",
-        description: "The user's brand kit (colours, fonts, logo, safe areas, preferred durations and easing) as JSON. Use its values when creating or restyling anything.",
+        description: "The brand kit to follow (colours, fonts, logo, safe areas, durations, easing) as JSON, merged in cascade: studio kit, then the client's, then the project folder's and the project's own (<project>.brand.json). The client is the one set with brand_use, else the one whose folder (clients/<client>/…) holds the open project. The reply lists `client` and the `sources` merged. Use its values when creating or restyling anything.",
+        props: || json!({"client": {"type": "string", "description": "Use this client's kit instead of the active / detected one."}}),
+        required: &[],
+        read_only: true,
+    },
+    Def {
+        name: "brand_list",
+        title: "List clients",
+        description: "The clients that have a brand kit (folders clients/<client>/ with a brand_kit.json), the studio kit, the client in use and the open project.",
         props: || json!({}),
         required: &[],
         read_only: true,
+    },
+    Def {
+        name: "brand_use",
+        title: "Use client",
+        description: "Use this client's brand kit for the rest of the session (whatever project is open); null goes back to detecting the client from the open project's folder.",
+        props: || json!({"client": {"type": ["string", "null"], "description": "Client folder name, or null."}}),
+        required: &["client"],
+        read_only: false,
+    },
+    Def {
+        name: "brand_new",
+        title: "New client",
+        description: "Create a client: clients/<client>/ with projets/, medias/, out/ and a brand_kit.json holding only what this client changes (anything missing comes from the studio kit), or a copy of another client's kit (`from`). Then fill it with the client's colours, fonts and logo, and save the client's projects in clients/<client>/projets/.",
+        props: || {
+            json!({
+                "client": {"type": "string", "description": "Client name (used as the folder name)."},
+                "from": {"type": "string", "description": "Copy this existing client's kit instead of starting empty."}
+            })
+        },
+        required: &["client"],
+        read_only: false,
     },
 ];
 
@@ -153,7 +185,10 @@ pub fn run(p: &Proxy, name: &str, args: &Value) -> Value {
         "checkpoint" => checkpoint(p, args),
         "checkpoints" => checkpoints(p),
         "restore_checkpoint" => restore_checkpoint(p, args),
-        "brand_kit" => brand_kit(p).map(|v| vec![text_content(&v)]),
+        "brand_kit" => brand_kit(p, a_str(args, "client")).map(|v| vec![text_content(&v)]),
+        "brand_list" => brand_list(p).map(|v| vec![text_content(&v)]),
+        "brand_use" => brand_use(p, args).map(|v| vec![text_content(&v)]),
+        "brand_new" => brand_new(p, args).map(|v| vec![text_content(&v)]),
         _ => Err(format!("unknown tool {name}")),
     };
     match r {
@@ -471,16 +506,82 @@ fn restore_checkpoint(p: &Proxy, a: &Value) -> Result<Vec<Value>, String> {
     Ok(vec![text_content(&json!({"restored": label, "state": state, "history": json_of(&r)}))])
 }
 
-fn brand_kit(p: &Proxy) -> Result<Value, String> {
-    let path = p.brand.as_ref().ok_or("no brand kit: start mymotion-mcp with --brand FILE.json (see mymotion/brand_kit.example.json)")?;
-    let text = std::fs::read_to_string(path).map_err(|e| format!("cannot read the brand kit {}: {e}", path.display()))?;
-    serde_json::from_str(&text).map_err(|e| format!("brand kit {} is not valid JSON: {e}", path.display()))
+fn a_str<'a>(a: &'a Value, key: &str) -> Option<&'a str> {
+    a.get(key).and_then(Value::as_str)
+}
+
+fn brands(p: &Proxy) -> Result<&Brands, String> {
+    p.brands.as_ref().ok_or_else(|| "no brand kit: start mymotion-mcp with --brand FILE.json (the studio kit; see mymotion/brand_kit.example.json)".to_string())
+}
+
+/// The open project's file, if it has been saved.
+fn project_path(p: &Proxy) -> Option<PathBuf> {
+    let r = json_of(&p.call("get_project", json!({})).ok()?);
+    r.get("path").and_then(Value::as_str).filter(|s| !s.is_empty()).map(PathBuf::from)
+}
+
+fn brand_kit(p: &Proxy, client: Option<&str>) -> Result<Value, String> {
+    let b = brands(p)?;
+    let project = project_path(p);
+    let forced = client.map(str::to_string).or_else(|| lock(&p.client).clone());
+    let r = b.resolve(project.as_deref(), forced.as_deref())?;
+    Ok(json!({
+        "client": r.client,
+        "project": project,
+        "sources": r.sources,
+        "kit": r.kit,
+    }))
+}
+
+fn brand_list(p: &Proxy) -> Result<Value, String> {
+    let b = brands(p)?;
+    let project = project_path(p);
+    let detected = project.as_deref().and_then(|pp| b.client_of(pp));
+    Ok(json!({
+        "studio": b.default,
+        "clientsFolder": b.root.join(brand::CLIENTS),
+        "clients": b.list(),
+        "active": *lock(&p.client),
+        "detected": detected,
+        "project": project,
+    }))
+}
+
+fn brand_use(p: &Proxy, a: &Value) -> Result<Value, String> {
+    let b = brands(p)?;
+    let client = match a.get("client") {
+        Some(Value::String(c)) => {
+            let c = brand::check_client(c)?.to_string();
+            if !b.client_dir(&c).join(brand::FILE).is_file() {
+                let names: Vec<String> = b.list().iter().filter_map(|v| v["client"].as_str().map(str::to_string)).collect();
+                return Err(format!(
+                    "brand_use: no client `{c}` (have: {}); create it with brand_new",
+                    if names.is_empty() { "none".into() } else { names.join(", ") }
+                ));
+            }
+            Some(c)
+        }
+        Some(Value::Null) | None => None,
+        Some(other) => return Err(format!("brand_use: `client` must be a string or null, not {other}")),
+    };
+    *lock(&p.client) = client.clone();
+    Ok(
+        json!({"active": client, "note": if client.is_none() { "client detected from the open project's folder" } else { "this client's kit applies whatever project is open" }}),
+    )
+}
+
+fn brand_new(p: &Proxy, a: &Value) -> Result<Value, String> {
+    let b = brands(p)?;
+    let client = a_str(a, "client").ok_or("brand_new: `client` must be a string")?;
+    let kit = b.create(client, a_str(a, "from"))?;
+    let dir = kit.parent().map(Path::to_path_buf).unwrap_or_default();
+    Ok(json!({"client": client.trim(), "kit": kit, "projects": dir.join("projets"), "media": dir.join("medias"), "out": dir.join("out")}))
 }
 
 pub const BRAND_URI: &str = "mymotion://brand";
 
 pub fn resources(p: &Proxy) -> Vec<Value> {
-    if p.brand.is_none() {
+    if p.brands.is_none() {
         return vec![];
     }
     vec![
@@ -493,7 +594,7 @@ pub fn read_resource(p: &Proxy, uri: &str) -> Option<Value> {
     if uri != BRAND_URI {
         return None;
     }
-    let text = match brand_kit(p) {
+    let text = match brand_kit(p, None) {
         Ok(v) => serde_json::to_string_pretty(&v).unwrap_or_default(),
         Err(e) => json!({"error": e}).to_string(),
     };

@@ -117,6 +117,7 @@ elease\`.
 - [x] `focus_context` : sélection de l'utilisateur, temps courant, image rendue + capture du panneau Composition en live.
 - [x] `checkpoint` / `checkpoints` / `restore_checkpoint` sur l'historique branché.
 - [x] Charte `brand_kit.json` (+ ressource `mymotion://brand`) avec safe areas verticales et règles de timing/easing.
+- [x] **Chartes par client et par projet**, cumulées studio → client → dossier de projets → `<projet>.brand.json` ; client détecté d'après le dossier du projet (`clients/<Client>/projets/`) ou forcé (`brand_use`) ; outils `brand_list`, `brand_new`.
 - [x] Skill Claude **`motion-design`** (méthode, pièges, principes d'animation, recettes vérifiées : presets texte `bounceInWords`…, trim paths `contents/trim/end`, style `Bold`).
 - [x] `D:\MotionProjects\.mcp.json` passe par `mymotion` (live) et `mymotion-headless`.
 - [x] Testé en headless et en live (bridge) ; 7 tests unitaires, clippy `-D warnings` et `cargo xtask layers` OK.

@@ -15,8 +15,30 @@ voit l'app s'animer pendant que tu travailles : agis par petites étapes visible
    l'utilisateur**, image du panneau Composition. « ce calque », « ça », « ici » = la sélection.
    Si aucune comp n'est ouverte, demande ou crée-la.
 2. `brand_kit` : couleurs, polices, échelle typographique, safe areas, timing, easing. **Respecte-la**
-   sauf demande contraire.
+   sauf demande contraire. Vérifie le champ `client` de la réponse : l'utilisateur a **plusieurs
+   clients** (voir « Clients et chartes » ci-dessous). Si ce n'est pas le bon client, corrige avant
+   de créer quoi que ce soit.
 3. Avant toute modification importante : `checkpoint {"label": "avant <demande>"}`.
+
+## Clients et chartes
+
+Les chartes se cumulent, chaque niveau ne contenant que ce qui change :
+`D:/MotionProjects/brand_kit.json` (studio) → `clients/<Client>/brand_kit.json` →
+`brand_kit.json` d'un sous-dossier de projets → `<projet>.brand.json` à côté du `.ecproj`.
+
+- Le client est **détecté d'après le dossier du projet ouvert** (`clients/<Client>/…`). Range donc
+  chaque projet dans `D:/MotionProjects/clients/<Client>/projets/` (`save_project` avec ce chemin),
+  médias dans `…/medias/`, rendus dans `…/out/`.
+- `brand_list` : clients existants, client actif, client détecté. `brand_use {"client": "X"}` force
+  un client pour la session (`null` = revenir à la détection). `brand_kit {"client": "X"}` lit la charte
+  d'un client sans changer de client actif.
+- Nouveau client : `brand_new {"client": "Nom"}` (ou `"from": "AutreClient"` pour partir d'une copie),
+  puis remplis son `brand_kit.json` avec **uniquement** ce qui diffère du studio (couleurs, polices,
+  logo…) : demande les valeurs à l'utilisateur, ne les invente pas.
+- Exception pour un seul projet (couleur d'accent de campagne, durée…) : écris un
+  `<projet>.brand.json` à côté du `.ecproj` plutôt que de modifier la charte du client.
+- Les objets se fusionnent clé par clé ; une valeur simple ou une liste (ex. `colors.chart`)
+  **remplace** celle du niveau au-dessus.
 
 ## Boucle de travail (toujours)
 
@@ -28,7 +50,7 @@ voit l'app s'animer pendant que tu travailles : agis par petites étapes visible
 3. **Critiquer** honnêtement (lisibilité, rythme, safe areas, hiérarchie, cohérence avec la charte),
    corriger, re-vérifier. Montre la planche à l'utilisateur quand c'est utile.
 4. Si l'utilisateur n'aime pas : `restore_checkpoint {"label"}` puis autre approche.
-5. Sauvegarder : `save_project {"path": "D:/MotionProjects/projets/<nom>.ecproj"}`.
+5. Sauvegarder : `save_project {"path": "D:/MotionProjects/clients/<Client>/projets/<nom>.ecproj"}`.
 
 ## Conventions EffectCraft (pièges connus)
 
@@ -83,7 +105,7 @@ transitions 0.3–0.5 s ; marqueurs sur l'audio de la voix off pour caler les en
 ## Exports (formats de l'utilisateur)
 
 Sauvegarde d'abord le projet, puis rends depuis la CLI headless (n'occupe pas l'app) :
-- MP4 réseaux : `effectcraft-cli render --project P.ecproj --comp "Nom" --format h264 --out D:/MotionProjects/out/X.mp4` (rapide) ;
+- MP4 réseaux : `effectcraft-cli render --project P.ecproj --comp "Nom" --format h264 --out D:/MotionProjects/clients/<Client>/out/X.mp4` (rapide) ;
 - WebM transparent : `... --format webm --webm-codec vp9 --channels rgba --out X.webm` (lent : ~27 s par seconde en 1080×1920, garder pour la version finale) ;
 - GIF : `... --format gif --resolution half --fps 15 --out X.gif`.
 GPU : ajouter `--gpu` seulement si la comp est chargée en effets/3D (plus lent sur du texte simple).
