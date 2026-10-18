@@ -92,7 +92,8 @@ Estimations en heures de travail avec Claude (agent), pour une personne qui pilo
 ### Phase 0 — Mise en route en mode live · ✅ faite le 18 octobre 2026
 
 - [x] Visual Studio 2022 Build Tools (C++) et Rust 1.99.1 (`stable-x86_64-pc-windows-msvc`) installés via winget.
-- [x] `cargo build --release -p effectcraft -p effectcraft-cli` : **46 min** au premier build (12 threads, 16 Go). Binaires de ≈ 88 Mo dans `targetelease\`.
+- [x] `cargo build --release -p effectcraft -p effectcraft-cli` : **46 min** au premier build (12 threads, 16 Go). Binaires de ≈ 88 Mo dans `target
+elease\`.
 - [x] App lancée avec `--control 9877` : GPU **NVIDIA RTX 2060 sur Vulkan** (pas Direct3D 12, donc le bug #613 ne s'applique pas ici).
 - [x] `D:\MotionProjects\` créé (`projets\`, `medias\`, `out\`) avec :
   - `.mcp.json` : `effectcraft-app` (bridge, port 9877, mode principal) et `effectcraft` (headless, `--autosave`, confiné à `D:\MotionProjects`) ;
@@ -107,19 +108,25 @@ Estimations en heures de travail avec Claude (agent), pour une personne qui pilo
 - Le **WebM VP9 est lent** (≈ 27 s par seconde de vidéo 1080×1920) : rendre en WebM seulement pour la version finale, tester `--webm-codec av1` et la résolution moitié pour les essais.
 - Rendre depuis la CLI headless sur le `.ecproj` sauvegardé évite de bloquer l'app pendant l'export.
 
-### Phase 1 — MVP « on anime à deux, en direct » (≈ 20–35 h)
+### Phase 1 — MVP « on anime à deux, en direct » · 🟡 première tranche faite le 18 octobre 2026
 
-1. **`focus_context`** (bridge) : comp active, CTI, calques/propriétés/keyframes sélectionnés, zone de travail et capture du viewer en un seul appel → « anime *ce* calque » fonctionne.
-2. **Inspection temporelle** pour que Claude juge le mouvement :
-   - `render_filmstrip {comp?, from?, to?, frames, max_side}` : planche contact avec timecodes ;
-   - `plot_curves {layer, path}` : graphe valeur/vitesse en image (juger l'easing) ;
-   - `preview_play {from?, to?}` : lance la prévisualisation dans l'app pour que je voie le résultat sans toucher à rien.
-3. **Journal d'activité visible** : chaque action de Claude étiquetée « Claude : … » dans l'historique, avec un checkpoint avant chaque demande et un retour arrière en un clic (`history goto`).
-4. **Skill Claude `motion-design`** : conventions EffectCraft (chemins de propriétés, temps de calque vs comp, `batch` atomique), boucle « construire → planche contact → critiquer → corriger », principes d'animation pour la typo et les logos (anticipation, overshoot, décalage entre lettres, rythme 8–12 images).
-5. **Charte** `mymotion/brand_kit.json` (couleurs, polices, logo, easing préférés) + ressource MCP `mymotion://brand`.
-6. **Presets d'export** : « Réseaux MP4 H.264 1080×1920 », « WebM VP9 alpha », « GIF optimisé » ; vérifier la qualité du GIF (palette, tramage, poids) et la lecture du WebM alpha dans Chrome/Firefox.
+**Fait** (`apps/mymotion-mcp`, `mymotion/`, voir [mymotion/README.md](mymotion/README.md)) :
+- [x] Serveur MCP **`mymotion-mcp`** : proxy de `effectcraft-cli mcp` (tous les outils EffectCraft passent tels quels, progression et annulation des rendus comprises) + outils ajoutés, sans toucher au cœur (seule modif. amont : une ligne dans `xtask` pour la couche du nouveau crate).
+- [x] `render_filmstrip` : planche contact légendée pour juger timing et espacement.
+- [x] `plot_curves` : graphes valeur + vitesse avec clés, dépassement en % et vitesse maximale (dimensions identiques fusionnées « X=Y »).
+- [x] `focus_context` : sélection de l'utilisateur, temps courant, image rendue + capture du panneau Composition en live.
+- [x] `checkpoint` / `checkpoints` / `restore_checkpoint` sur l'historique branché.
+- [x] Charte `brand_kit.json` (+ ressource `mymotion://brand`) avec safe areas verticales et règles de timing/easing.
+- [x] Skill Claude **`motion-design`** (méthode, pièges, principes d'animation, recettes vérifiées : presets texte `bounceInWords`…, trim paths `contents/trim/end`, style `Bold`).
+- [x] `D:\MotionProjects\.mcp.json` passe par `mymotion` (live) et `mymotion-headless`.
+- [x] Testé en headless et en live (bridge) ; 7 tests unitaires, clippy `-D warnings` et `cargo xtask layers` OK.
 
-**Critère de sortie** : je sélectionne un texte, je dis « fais-le rebondir lettre par lettre, plus nerveux à l'entrée », Claude l'anime sous mes yeux, me montre la courbe et ajuste.
+**Reste** :
+- [ ] Étiqueter les actions de Claude dans l'historique (« Claude : … ») — demande un changement côté moteur ; à proposer en PR amont.
+- [ ] Presets d'export nommés dans la Render Queue (pour l'instant : commandes CLI dans la charte et le skill).
+- [ ] Vérifier qualité/poids des GIF (palette, tramage) et lecture du WebM alpha dans Chrome/Firefox.
+- [ ] Choix automatique CPU/GPU à l'export (le mode « auto » existe dans `bench`, à exposer).
+- [ ] Session réelle avec l'utilisateur pour ajuster le skill.
 
 ### Phase 2 — Recettes pour mes 5 types de contenu (≈ 30–50 h)
 

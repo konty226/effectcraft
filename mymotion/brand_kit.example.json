@@ -1,0 +1,56 @@
+{
+  "name": "Ma charte (exemple à remplacer)",
+  "colors": {
+    "background": "#14121f",
+    "primary": "#ff4f8b",
+    "secondary": "#4fd1ff",
+    "text": "#ffffff",
+    "textMuted": "#b8b5c9",
+    "accent": "#ffcc4d",
+    "chart": ["#ff4f8b", "#4fd1ff", "#ffcc4d", "#7ee08a", "#b48cff"]
+  },
+  "fonts": {
+    "title": { "family": "Inter", "style": "Bold" },
+    "body": { "family": "Inter", "style": "Regular" },
+    "numbers": { "family": "Inter", "style": "Bold", "tracking": -20 }
+  },
+  "typeScale": {
+    "vertical_1080x1920": { "hook": 140, "title": 110, "subtitle": 64, "caption": 52, "minimum": 40 },
+    "landscape_1920x1080": { "title": 120, "subtitle": 60, "caption": 44, "minimum": 32 }
+  },
+  "logo": {
+    "file": "D:/MotionProjects/medias/logo.svg",
+    "minWidthPx": 180,
+    "clearSpacePct": 15
+  },
+  "formats": {
+    "vertical": { "width": 1080, "height": 1920, "frameRate": 30 },
+    "square": { "width": 1080, "height": 1080, "frameRate": 30 },
+    "portrait": { "width": 1080, "height": 1350, "frameRate": 30 },
+    "landscape": { "width": 1920, "height": 1080, "frameRate": 30 }
+  },
+  "safeAreas": {
+    "note": "Marges approximatives en pixels pour 1080x1920 : interface TikTok / Reels / Shorts (boutons à droite, légende en bas). Garder textes et logo à l'intérieur.",
+    "vertical_1080x1920": { "top": 250, "bottom": 450, "left": 60, "right": 140 }
+  },
+  "timing": {
+    "hookMaxSeconds": 2,
+    "textInSeconds": [0.4, 0.7],
+    "textOutSeconds": [0.25, 0.4],
+    "holdMinSeconds": 1.5,
+    "staggerPerLetterSeconds": 0.03,
+    "staggerPerWordSeconds": 0.08,
+    "sceneTransitionSeconds": [0.3, 0.5]
+  },
+  "easing": {
+    "default": "easyEase, sortie rapide (influence ~75 % en entrée de clé finale)",
+    "entrance": "overshoot léger : 5 à 12 % puis retour, total 0.5–0.8 s",
+    "exit": "accélération (ease in), plus courte que l'entrée",
+    "avoid": ["linéaire sur les mouvements de position", "rebonds de plus de 2 oscillations"]
+  },
+  "exports": {
+    "social": "effectcraft-cli render --format h264 --out OUT.mp4",
+    "overlay": "effectcraft-cli render --format webm --webm-codec vp9 --channels rgba --out OUT.webm",
+    "gif": "effectcraft-cli render --format gif --resolution half --fps 15 --out OUT.gif"
+  }
+}

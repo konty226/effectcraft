@@ -1,0 +1,16 @@
+[package]
+name = "mymotion-mcp"
+description = "MCP proxy over effectcraft-cli mcp: passes every EffectCraft tool through and adds motion-design tools (filmstrip, curve plots, focus context, checkpoints, brand kit)"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+serde_json = { workspace = true }
+image = { workspace = true }
+tiny-skia = { workspace = true }

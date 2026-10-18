@@ -61,6 +61,8 @@ const LAYERS: &[(&str, u8)] = &[
     ("effectcraft", 6),
     ("cli", 6),
     ("web", 6),
+    // mymotion fork: MCP proxy adding motion-design tools (apps/mymotion-mcp).
+    ("mymotion-mcp", 6),
 ];
 
 /// Allowed same-layer edges (from, to).
