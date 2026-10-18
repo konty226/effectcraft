@@ -17,6 +17,7 @@
 mod b64;
 mod brand;
 mod draw;
+mod project;
 mod tools;
 
 use std::collections::HashMap;

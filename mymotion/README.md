@@ -39,6 +39,7 @@ par exemple `--autosave`, `--project F.ecproj`, `--automation-read-root DIR`).
 - `focus_context {max_side?, image?}` : comp active, sélection de l'utilisateur, temps courant, image rendue et capture du panneau Composition.
 - `checkpoint {label}`, `checkpoints {}`, `restore_checkpoint {label}` : points de retour dans l'historique (sans perdre les branches).
 - `brand_kit {client?}`, `brand_list {}`, `brand_use {client|null}`, `brand_new {client, from?}` : chartes par client et par projet (ci-dessous).
+- `project_new {client, project, brief?, script?}`, `project_brief {client?, project?, images?}`, `brief_update {section, content, append?}`, `project_list {client?}` : dossiers projet avec brief (ci-dessous).
 
 ## Chartes par client et par projet
 
@@ -54,3 +55,26 @@ D:\MotionProjects\clients\<Client>\projets\<…>\brand_kit.json  dossier de proj
 
 Le client est détecté d'après le dossier du projet ouvert, ou forcé pour la session avec `brand_use`.
 `brand_new` crée `clients/<Client>/` avec `projets/`, `medias/`, `out/` et une charte vide (ou copiée d'un autre client).
+
+## Projets et briefs
+
+Chaque travail a son dossier, créé par `project_new` et rempli par la conversation ou à la main :
+
+```text
+clients\<Client>\projets\<Projet>\
+  BRIEF.md     Infos, Objectif et message clé, Public cible, Script, Assets fournis,
+               Références et exemples, Mood board, Style, Contraintes et mentions obligatoires,
+               Livrables, Notes de suivi
+  SCRIPT.md    tableau scène / temps / texte à l'écran / voix off / visuel
+  assets\      fichiers fournis (logos, photos, vidéos, musique, voix off, polices)
+  references\  exemples (images, vidéos, liens.txt)
+  moodboard\   images d'ambiance
+  out\         rendus
+  <Projet>.ecproj
+```
+
+`project_brief` renvoie le brief section par section, le script, ce qui manque encore (un dossier
+rempli compte : déposer des images dans `moodboard/` complète la section Mood board), l'inventaire des
+fichiers et une planche visuelle du mood board et des références. Le `.ecproj` enregistré dans le dossier
+fait du projet le projet « ouvert » : les outils le retrouvent sans arguments, et la charte du client
+s'applique (un `brand_kit.json` posé dans le dossier du projet y ajoute ses exceptions).

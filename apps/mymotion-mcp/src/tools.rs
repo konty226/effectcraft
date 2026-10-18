@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value, json};
 
 use crate::brand::{self, Brands};
-use crate::{Proxy, b64, draw, lock};
+use crate::{Proxy, b64, draw, lock, project};
 
-pub const INSTRUCTIONS: &str = "mymotion tools (motion design with Claude): render_filmstrip shows a stretch of the animation as a captioned contact sheet, so judge timing and spacing on it rather than on one frame. plot_curves draws a property's value and speed over time with its keyframes and reports overshoot and peak speed, to judge easing. focus_context returns what the user is looking at in the live app (active comp, current time, selected layers, properties and keys) plus an image, call it first when the user says \"this\" or \"the selected layer\". checkpoint {label} before a large change, restore_checkpoint {label} to go back. brand_kit (also resource mymotion://brand) returns the brand kit to follow (colours, fonts, timing), merged studio -> client -> project; the user has several clients: check `client` in its reply, switch with brand_use, list with brand_list, create one with brand_new, and save each client's projects under clients/<client>/projets/ so the right kit applies.";
+pub const INSTRUCTIONS: &str = "mymotion tools (motion design with Claude): render_filmstrip shows a stretch of the animation as a captioned contact sheet, so judge timing and spacing on it rather than on one frame. plot_curves draws a property's value and speed over time with its keyframes and reports overshoot and peak speed, to judge easing. focus_context returns what the user is looking at in the live app (active comp, current time, selected layers, properties and keys) plus an image, call it first when the user says \"this\" or \"the selected layer\". checkpoint {label} before a large change, restore_checkpoint {label} to go back. brand_kit (also resource mymotion://brand) returns the brand kit to follow (colours, fonts, timing), merged studio -> client -> project; the user has several clients: check `client` in its reply, switch with brand_use, list with brand_list, create one with brand_new, and save each client's projects under clients/<client>/projets/ so the right kit applies. Every job starts from a project brief: project_new creates clients/<client>/projets/<project>/ with BRIEF.md, SCRIPT.md, assets/, references/, moodboard/ (fill what the user said, ask for the rest); project_brief reads it with a sheet of the mood board and references; brief_update records answers and feedback; project_list shows projects and what their brief lacks.";
 
 pub struct Checkpoint {
     pub label: String,
@@ -136,6 +136,59 @@ const DEFS: &[Def] = &[
         required: &["client"],
         read_only: false,
     },
+    Def {
+        name: "project_new",
+        title: "New project",
+        description: "Create a client's project folder clients/<client>/projets/<project>/ with BRIEF.md (sections: Infos, Objectif et message clé, Public cible, Script, Assets fournis, Références et exemples, Mood board, Style, Contraintes et mentions obligatoires, Livrables, Notes de suivi), SCRIPT.md (scene table) and the folders assets/, references/, moodboard/, out/. Fill `brief` with what the user already said (keys are section names, loosely matched: \"objectif\", \"style\", \"livrables\"…; values are text or lists), `script` with the scene breakdown. Then ask the user for the missing essentials, tell them to drop files in assets/, references/ and moodboard/, and save the .ecproj in the folder (path in the reply).",
+        props: || {
+            json!({
+                "client": {"type": "string", "description": "Existing client (brand_list); create it with brand_new first."},
+                "project": {"type": "string", "description": "Project name (folder name)."},
+                "brief": {"type": "object", "description": "Section name → text or list of lines."},
+                "script": {"type": "string", "description": "Scene breakdown for SCRIPT.md (Markdown table or text)."}
+            })
+        },
+        required: &["client", "project"],
+        read_only: false,
+    },
+    Def {
+        name: "project_brief",
+        title: "Project brief",
+        description: "Read a project's brief before creating anything: BRIEF.md by section, SCRIPT.md, what is still missing, every supplied file (assets/, references/, moodboard/ with kind and image size), notes in references/*.txt, plus a visual sheet of the mood board and reference images to derive the style from. Defaults to the project holding the open .ecproj.",
+        props: || {
+            json!({
+                "client": {"type": "string", "description": "Client (with `project`); default: from the open project."},
+                "project": {"type": "string", "description": "Project name; default: the open project's."},
+                "images": {"type": "boolean", "description": "Include the mood board / references sheet (default true)."}
+            })
+        },
+        required: &[],
+        read_only: true,
+    },
+    Def {
+        name: "brief_update",
+        title: "Update brief",
+        description: "Write one section of a project's BRIEF.md (or SCRIPT.md with section \"script-file\"), e.g. to record what the user answered, a decision or feedback (section \"Notes de suivi\", append true). Section names are loosely matched; an unknown name adds a new section.",
+        props: || {
+            json!({
+                "section": {"type": "string", "description": "Section name (\"style\", \"objectif\", \"notes\"…) or \"script-file\" for SCRIPT.md."},
+                "content": {"type": "string", "description": "Markdown text."},
+                "append": {"type": "boolean", "description": "Add below the current text instead of replacing it."},
+                "client": {"type": "string", "description": "Default: from the open project."},
+                "project": {"type": "string", "description": "Default: the open project's."}
+            })
+        },
+        required: &["section", "content"],
+        read_only: false,
+    },
+    Def {
+        name: "project_list",
+        title: "List projects",
+        description: "Projects of a client (or of every client) with their folder, number of files and the brief sections still missing.",
+        props: || json!({"client": {"type": "string", "description": "Only this client."}}),
+        required: &[],
+        read_only: true,
+    },
 ];
 
 pub fn is_ours(name: &str) -> bool {
@@ -189,6 +242,10 @@ pub fn run(p: &Proxy, name: &str, args: &Value) -> Value {
         "brand_list" => brand_list(p).map(|v| vec![text_content(&v)]),
         "brand_use" => brand_use(p, args).map(|v| vec![text_content(&v)]),
         "brand_new" => brand_new(p, args).map(|v| vec![text_content(&v)]),
+        "project_new" => project_new(p, args).map(|v| vec![text_content(&v)]),
+        "project_brief" => project_brief(p, args),
+        "brief_update" => brief_update(p, args).map(|v| vec![text_content(&v)]),
+        "project_list" => project_list(p, args).map(|v| vec![text_content(&v)]),
         _ => Err(format!("unknown tool {name}")),
     };
     match r {
@@ -576,6 +633,109 @@ fn brand_new(p: &Proxy, a: &Value) -> Result<Value, String> {
     let kit = b.create(client, a_str(a, "from"))?;
     let dir = kit.parent().map(Path::to_path_buf).unwrap_or_default();
     Ok(json!({"client": client.trim(), "kit": kit, "projects": dir.join("projets"), "media": dir.join("medias"), "out": dir.join("out")}))
+}
+
+// ---- projects and briefs ----
+
+/// (client, project, folder) from the arguments, else from the open .ecproj.
+fn project_target(p: &Proxy, a: &Value) -> Result<(String, String, PathBuf), String> {
+    let b = brands(p)?;
+    match (a_str(a, "client"), a_str(a, "project")) {
+        (Some(c), Some(n)) => {
+            let d = project::dir(b, c, n)?;
+            if !d.join(project::BRIEF).is_file() {
+                return Err(format!("no project `{n}` for client `{c}` (project_list shows them; project_new creates one)"));
+            }
+            Ok((c.trim().to_string(), n.trim().to_string(), d))
+        }
+        (None, None) => {
+            let open = project_path(p).ok_or("no project given and the open project is not saved: pass `client` and `project`")?;
+            project::of_file(b, &open).ok_or_else(|| {
+                format!(
+                    "the open project {} is not in a project folder (clients/<client>/projets/<project>/ with a BRIEF.md): pass `client` and `project`",
+                    open.display()
+                )
+            })
+        }
+        _ => Err("pass both `client` and `project`, or neither (the open project)".into()),
+    }
+}
+
+fn project_new(p: &Proxy, a: &Value) -> Result<Value, String> {
+    let b = brands(p)?;
+    let client = a_str(a, "client").ok_or("project_new: `client` must be a string")?;
+    let name = a_str(a, "project").ok_or("project_new: `project` must be a string")?;
+    let empty = Map::new();
+    let fields = match a.get("brief") {
+        Some(Value::Object(o)) => o,
+        None | Some(Value::Null) => &empty,
+        Some(_) => return Err("project_new: `brief` must be an object (section → text)".into()),
+    };
+    let (d, brief) = project::create(b, client, name, fields, a_str(a, "script"))?;
+    let ecproj = d.join(format!("{}.ecproj", name.trim()));
+    Ok(json!({
+        "client": client.trim(), "project": name.trim(), "folder": d,
+        "brief": d.join(project::BRIEF), "script": d.join(project::SCRIPT),
+        "dropFilesIn": {"assets": d.join("assets"), "references": d.join("references"), "moodboard": d.join("moodboard")},
+        "saveProjectAs": ecproj, "renders": d.join("out"),
+        "missing": project::missing(&d, &brief),
+    }))
+}
+
+fn project_brief(p: &Proxy, a: &Value) -> Result<Vec<Value>, String> {
+    let (client, name, d) = project_target(p, a)?;
+    let brief = project::Brief::parse(&project::read(&d.join(project::BRIEF))?);
+    let script = project::read(&d.join(project::SCRIPT)).unwrap_or_default();
+    let sections: Map<String, Value> = brief.sections.iter().map(|(n, b)| (n.clone(), json!(b))).collect();
+    let files = project::inventory(&d);
+    let out = json!({
+        "client": client, "project": name, "folder": d,
+        "brief": sections, "script": script, "missing": project::missing(&d, &brief),
+        "files": files, "referenceNotes": project::notes(&d, 2000),
+    });
+    let mut content = vec![text_content(&out)];
+    if a.get("images").and_then(Value::as_bool).unwrap_or(true) {
+        let paths = project::images(&d, &["moodboard", "references"], 24);
+        let cells: Vec<draw::Cell> = paths
+            .iter()
+            .filter_map(|path| {
+                let img = image::open(path).ok()?.thumbnail(320, 320).to_rgba8();
+                let folder = path.parent().and_then(Path::file_name).map(|f| f.to_string_lossy().to_uppercase()).unwrap_or_default();
+                let file: String = path.file_stem().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default().chars().take(16).collect();
+                Some(draw::Cell { image: img, caption: format!("{}/{}", folder.chars().take(4).collect::<String>(), file) })
+            })
+            .collect();
+        if !cells.is_empty() {
+            let sheet = draw::filmstrip(&cells, 5, false, &format!("MOODBOARD + REFERENCES  {}", cells.len()));
+            content.push(image_content(&sheet)?);
+        }
+    }
+    Ok(content)
+}
+
+fn brief_update(p: &Proxy, a: &Value) -> Result<Value, String> {
+    let (client, name, d) = project_target(p, a)?;
+    let section = a_str(a, "section").ok_or("brief_update: `section` must be a string")?;
+    let content = a_str(a, "content").ok_or("brief_update: `content` must be a string")?;
+    let append = a.get("append").and_then(Value::as_bool).unwrap_or(false);
+    if project::fold(section) == "scriptfile" {
+        let path = d.join(project::SCRIPT);
+        let text =
+            if append { format!("{}\n{}\n", project::read(&path).unwrap_or_default().trim_end(), content.trim()) } else { format!("{}\n", content.trim()) };
+        project::write(&path, &text)?;
+        return Ok(json!({"client": client, "project": name, "updated": path}));
+    }
+    let path = d.join(project::BRIEF);
+    let mut brief = project::Brief::parse(&project::read(&path)?);
+    let canonical = brief.set(section, content, append);
+    project::write(&path, &brief.render())?;
+    Ok(json!({"client": client, "project": name, "section": canonical, "missing": project::missing(&d, &brief)}))
+}
+
+fn project_list(p: &Proxy, a: &Value) -> Result<Value, String> {
+    let b = brands(p)?;
+    let client = a_str(a, "client").map(brand::check_client).transpose()?;
+    Ok(json!({"projects": project::list(b, client)}))
 }
 
 pub const BRAND_URI: &str = "mymotion://brand";

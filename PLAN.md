@@ -118,6 +118,8 @@ elease\`.
 - [x] `checkpoint` / `checkpoints` / `restore_checkpoint` sur l'historique branché.
 - [x] Charte `brand_kit.json` (+ ressource `mymotion://brand`) avec safe areas verticales et règles de timing/easing.
 - [x] **Chartes par client et par projet**, cumulées studio → client → dossier de projets → `<projet>.brand.json` ; client détecté d'après le dossier du projet (`clients/<Client>/projets/`) ou forcé (`brand_use`) ; outils `brand_list`, `brand_new`.
+- [x] **Dossier projet avec brief** : `project_new` crée `BRIEF.md` (infos, objectif, public, script, assets, références, mood board, style, contraintes, livrables, notes), `SCRIPT.md`, `assets/`, `references/`, `moodboard/`, `out/` ; `project_brief` lit tout avec une planche visuelle du mood board ; `brief_update`, `project_list`.
+- [x] Premier vrai projet : spot Reel 30 s de la 21e Semaine du numérique (v1 typographique, v2 photos + verre dépoli + reflets).
 - [x] Skill Claude **`motion-design`** (méthode, pièges, principes d'animation, recettes vérifiées : presets texte `bounceInWords`…, trim paths `contents/trim/end`, style `Bold`).
 - [x] `D:\MotionProjects\.mcp.json` passe par `mymotion` (live) et `mymotion-headless`.
 - [x] Testé en headless et en live (bridge) ; 7 tests unitaires, clippy `-D warnings` et `cargo xtask layers` OK.

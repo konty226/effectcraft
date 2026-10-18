@@ -9,6 +9,31 @@ Tu pilotes **EffectCraft**, un compositeur de type After Effects, via le serveur
 (proxy de `effectcraft-cli mcp` qui ajoute des outils de motion design). En mode live, l'utilisateur
 voit l'app s'animer pendant que tu travailles : agis par petites étapes visibles.
 
+## Tout commence par un brief
+
+Chaque travail est un **projet** : `clients/<Client>/projets/<Projet>/` avec `BRIEF.md`, `SCRIPT.md`,
+`assets/`, `references/`, `moodboard/`, `out/` et le `.ecproj`.
+
+- **Nouveau travail** : `project_list` (existe-t-il déjà ?), sinon `project_new {client, project,
+  brief, script}` en remplissant `brief` avec **tout ce que l'utilisateur a déjà dit** (sections :
+  Infos, Objectif et message clé, Public cible, Script, Assets fournis, Références et exemples,
+  Mood board, Style, Contraintes et mentions obligatoires, Livrables). Puis pose **en une seule fois**
+  les questions sur ce qui manque d'essentiel (`missing`) : objectif, durée et format, plateformes,
+  textes/script, assets imposés, style, livrables, échéance. Dis-lui de déposer ses fichiers dans
+  `assets/`, `references/` et `moodboard/` (chemins dans la réponse).
+- **Avant de créer** : `project_brief` (le projet ouvert par défaut). Lis le brief, le script et les
+  notes de références ; **regarde la planche** du mood board et des références et déduis-en la
+  direction (palette, lumière, densité, typo, rythme) en l'expliquant en 2–3 phrases à l'utilisateur.
+  Utilise les fichiers de `assets/` en priorité sur toute image trouvée ailleurs.
+- **Respecte le script** : textes exacts, ordre et minutage de `SCRIPT.md`. Si tu proposes un
+  changement, demande-le d'abord.
+- **Garde la trace** : `brief_update {section: "notes", content, append: true}` pour chaque
+  décision, retour ou version (date, fichier). Les réponses de l'utilisateur vont dans leur section.
+- Sauvegarde le projet sous `saveProjectAs` (dans le dossier du projet) et les rendus dans son `out/`.
+- Images trouvées sur le web : seulement libres de droits, avec accord de l'utilisateur avant
+  téléchargement ; note auteur, page et licence dans `assets/SOURCES.md`. Écarte les images avec
+  logos de marques ou enseignes lisibles.
+
 ## Démarrage de session
 
 1. `focus_context` : comp active, temps courant, calques/propriétés/clés **sélectionnés par
@@ -50,7 +75,7 @@ Les chartes se cumulent, chaque niveau ne contenant que ce qui change :
 3. **Critiquer** honnêtement (lisibilité, rythme, safe areas, hiérarchie, cohérence avec la charte),
    corriger, re-vérifier. Montre la planche à l'utilisateur quand c'est utile.
 4. Si l'utilisateur n'aime pas : `restore_checkpoint {"label"}` puis autre approche.
-5. Sauvegarder : `save_project {"path": "D:/MotionProjects/clients/<Client>/projets/<nom>.ecproj"}`.
+5. Sauvegarder : `save_project {"path": "D:/MotionProjects/clients/<Client>/projets/<Projet>/<Projet>.ecproj"}`.
 
 ## Conventions EffectCraft (pièges connus)
 
@@ -105,7 +130,7 @@ transitions 0.3–0.5 s ; marqueurs sur l'audio de la voix off pour caler les en
 ## Exports (formats de l'utilisateur)
 
 Sauvegarde d'abord le projet, puis rends depuis la CLI headless (n'occupe pas l'app) :
-- MP4 réseaux : `effectcraft-cli render --project P.ecproj --comp "Nom" --format h264 --out D:/MotionProjects/clients/<Client>/out/X.mp4` (rapide) ;
+- MP4 réseaux : `effectcraft-cli render --project P.ecproj --comp "Nom" --format h264 --out D:/MotionProjects/clients/<Client>/projets/<Projet>/out/X.mp4` (rapide) ;
 - WebM transparent : `... --format webm --webm-codec vp9 --channels rgba --out X.webm` (lent : ~27 s par seconde en 1080×1920, garder pour la version finale) ;
 - GIF : `... --format gif --resolution half --fps 15 --out X.gif`.
 GPU : ajouter `--gpu` seulement si la comp est chargée en effets/3D (plus lent sur du texte simple).
