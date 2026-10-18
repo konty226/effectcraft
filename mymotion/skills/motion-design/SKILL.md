@@ -58,7 +58,7 @@ Les chartes se cumulent, chaque niveau ne contenant que ce qui change :
   `describe_command {"command": "layer.newText"}`.
 - **Calques** : par id, `"#n"` (index depuis le haut) ou **nom** → nomme toujours à la création
   (`name`). **Propriétés** par chemin : `transform/position`, `transform/scale` (`[x,y]` en %),
-  `transform/rotation`, `transform/opacity` (0–100), `transform/anchorPoint`, `effects/#1/<param>`.
+  `transform/rotation`, `transform/opacity` (0–100), `transform/anchor` (point d'ancrage), `effects/#1/<param>`.
   `get_layer {"layer": "Titre", "flat": true}` donne tous les chemins.
 - **Temps** en secondes. `add_keyframe` / `set_property` avec `time` = **temps de calque** ;
   passe `"timeBase": "comp"` si le calque est décalé. `get_property` et `render_frame` = temps comp.
@@ -94,7 +94,7 @@ Les chartes se cumulent, chaque niveau ne contenant que ce qui change :
 `layer.addShapeItem {layer, kind: "trim"}` renvoie `{path: "contents/trim"}` : clés sur `contents/trim/end` de 0 à 100
 pour un tracé qui se dessine (`contents/trim/start`, `offset` aussi). Logo SVG/AI : import fichier puis animation (masque, échelle, trim).
 
-**Data-viz** — une barre = un shape `rect` avec point d'ancrage en bas, animer `transform/scale` Y de 0 à la valeur ;
+**Data-viz** — une barre = un shape `rect` avec point d'ancrage en bas (`transform/anchor` = `[0, hauteur/2]`), animer `transform/scale` Y de 0 à la valeur ;
 compteur = texte dont la source est pilotée par une expression (chemin donné par `get_layer {flat: true}`) ; couleurs `colors.chart` de la charte, une couleur par série.
 
 **Explainer** — une comp par scène (nommée), assemblées dans une comp maître ; `layer.timing {layers, start}` pour placer ;
