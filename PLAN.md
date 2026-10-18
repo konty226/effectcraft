@@ -1,0 +1,187 @@
+# Plan d'évolution — mon éditeur de motion design piloté avec Claude
+
+> Fork de [storytold/effectcraft](https://github.com/storytold/effectcraft) : `konty226/effectcraft`, cloné dans `D:\Fork\effectcraft`.
+> Analyse faite le 18 octobre 2026 sur `upstream/main` `f3f24ef1` (v0.12.0 en développement, dernière release v0.11.1).
+
+---
+
+## 1. Ce que j'ai trouvé (synthèse de l'analyse)
+
+### 1.1 En une phrase
+
+EffectCraft est un clone open source d'After Effects en Rust pur, **déjà conçu pour être piloté par des agents** : un serveur MCP complet existe (`effectcraft-cli mcp`), sur le même modèle que PhotoCraft (même famille « Crafting Apps », mêmes outils `command_run` / `command_batch` / `doc_inspect` / `render_preview`). Le travail n'est donc **pas** de construire l'intégration Claude, mais de la **spécialiser** pour ma façon de travailler.
+
+### 1.2 Fiche technique
+
+| Sujet | Constat |
+|---|---|
+| **Langage / stack** | Rust 2024 (≥ 1.95), workspace de 32 crates + 3 apps + `xtask`. UI **egui/eframe 0.36**, GPU **wgpu 30** (Direct3D 12 / Vulkan / Metal / WebGPU), rendu CPU parallèle (rayon, tiny-skia), texte (skrifa + harfrust), expressions et scripts **JavaScript via boa**. Build web (WASM) aussi. |
+| **Taille** | ≈ 389 000 lignes de Rust, ≈ 3 700 tests. Code écrit quasi entièrement par des agents (Opus 5.5), avec des règles strictes. |
+| **Architecture** | Couches L0→L6 vérifiées par `cargo xtask layers` : `time`/`geom`/`color` → `raster`/`keyframe`/`path` → `project`/`text`/`effects` → `render`/`gpu`/`export`/`lottie`/`plugin` → `engine` (Session, undo, **registre de commandes**) → `ui-egui` / `automation` (MCP) → apps `effectcraft` (bureau), `effectcraft-cli`, `effectcraft-web`. Le moteur ne dépend jamais de l'UI. |
+| **Principe clé** | **Tout est une commande** (id, label, menu, raccourci, params JSON validés, `enabled()`, `run()`). Menus, raccourcis, CLI, canal de contrôle et MCP passent par le même registre → tout ce que je fais à la souris, Claude peut le faire. |
+| **Modèle de données** | `Project { items, render_queue }` → `Comp { taille, fps, durée, layers, markers }` → `Layer { source (footage/comp/solid/texte/forme/null/caméra/lumière), in/out/start, stretch, parent, blend, matte, props }`. Tout ce qui s'anime est une `Property` dans un arbre `PropGroup`, adressée par chemin (`transform/position`, `effects/#1/blurriness`, `@uid`). Temps exact en `Tick` entiers (254 016 000 000/s), keyframes en **temps de calque**. |
+| **Animation** | Keyframes linéaire / Bézier / hold / auto / continu, roving, Easy Ease, Graph Editor (valeur + vitesse), expressions AE (`wiggle`, `loopOut`, `thisComp.layer(...)`), animateurs de texte, puppet, time remap. |
+| **Effets** | 306 effets (les 298 d'AE + extras), 9 styles de calque, CPU + GPU (shaders compute wgpu vérifiés contre le CPU). 54 presets d'animation originaux (texte, transitions, fonds). |
+| **Rendu** | `Renderer::comp_frame(comp, t)` : source → masques → effets → styles → transform (motion blur) → matte → blend. 3D classique + « Advanced 3D » (glTF/OBJ/FBX, caméras, lumières, ombres). |
+| **Export** | Render Queue type AE : **H.264 MP4**, **ProRes MOV** (jusqu'à 4444 XQ avec alpha), HEVC, AV1, **WebM VP9 + alpha**, séquences PNG/JPEG/TIFF/EXR, **GIF**, WAV/AIFF, **Lottie JSON / .lottie** (import et export). Encodeurs 100 % Rust, **pas de FFmpeg**, pas d'accélération matérielle (NVENC absent). |
+| **Format projet** | `.ecproj` = **JSON lisible et versionné** (diffable dans git) ; `.ecprojx` = XML. Pas d'ouverture des `.aep`. |
+| **Templates** | **Essential Graphics** : contrôles exposés d'une comp, export en `.ectemplate`, rendu en série en CLI : `effectcraft-cli render --template lt.ectemplate --values values.json --out ...`. Idéal pour du motion design « par données ». |
+| **Extensibilité** | (1) Scripts JS au modèle objet d'AE (`app.project`, `comp.layers.addText`…) + panneaux **ScriptUI** dockables ; (2) **plug-ins d'effets WebAssembly** sandboxés (API v1, interpréteur wasmi) ou en Rust ; (3) presets `.ecpreset` ; (4) dossier `extensions/` pour outils livrés en script. |
+| **Intégration agents (existante)** | Serveur MCP stdio, **headless** (`mcp`, `--demo`, `--project`, `--gpu`, `--autosave`) ou **bridgé** à l'app ouverte (`mcp --bridge 9877` + `effectcraft --control 9877`). ≈ 36 outils : `command_list/run/batch`, `doc_inspect`, `render_preview`, `get_layer/get_property/set_property`, `add_keyframe`, `add_effect`, `list_effects`, `list_fonts`, `run_script`, `batch` atomique avec références `$N.key`, `undo/redo/history` (arbre d'historique), `render_frame` (PNG, alpha possible) ; en mode bridge : `screenshot`, `ui_inspect`, `ui_click`, `ui_drag`, `ui_key`, `ui_type`, `ui_set`. Ressources `effectcraft://document` et `effectcraft://commands`. Confinement des fichiers par `--automation-read-root` / `--automation-write-root` (comme PhotoCraft). Progression et annulation des rendus longs. `.mcp.json` fourni. |
+| **Qualité du code** | Très disciplinée : règle « Never crash » (pas d'`unwrap`/`panic`/`unsafe` hors tests), `unsafe_code = "forbid"`, clippy `-D warnings`, test de régression par bug, couches vérifiées, attribution des assets vérifiée. Faiblesses : **aucune CI sur les PR** (le `cargo xtask ci` ne tourne qu'en local), fidélité vs AE presque pas mesurée, 6 crashs connus ouverts. |
+| **Maturité** | **Alpha**, premier commit le **1er octobre 2026** (!). Les mainteneurs estiment « ≈ 91 % des fonctions d'AE existent » mais « ≈ 45 % prêt pour du travail pro ». **macOS est la plateforme la plus testée** ; Linux/Windows ont des bugs d'interaction (dont #613 : compositeur Direct3D 12 qui échoue sur certains GPU Windows). |
+| **Maintenance** | Extrêmement active : **2 187 commits en 18 jours** (≈ 800 cette dernière semaine), 7 255 étoiles, 3 855 forks, release tous les 2 à 4 jours, 411 issues et 178 PR ouvertes. |
+| **Licence** | **MIT OU Apache-2.0** (au choix) → fork modifié, usage perso et même commercial **autorisés**. Obligations : garder `LICENSE-*`, `NOTICE`, `ATTRIBUTION.md` (polices OFL, etc.). ⚠️ Les **marques ArtCraft** (`docs/brand/`, nom, logos, liens Discord/getartcraft dans l'app) ne sont **pas** sous licence libre : si je **publie ou distribue** une version modifiée, je dois les retirer et ne pas la présenter comme un produit ArtCraft. Je peux écrire « basé sur EffectCraft par l'équipe ArtCraft ». |
+
+### 1.3 Ce que ça change pour moi
+
+- ✅ **L'intégration Claude existe déjà et est solide** : Claude peut créer des comps, animer, appliquer des effets et regarder une image rendue dès aujourd'hui.
+- ✅ Le format JSON + git + historique branché = collaboration traçable avec Claude.
+- ✅ Les templates Essential Graphics + rendu CLI = production en série.
+- ⚠️ **Rust n'est pas installé sur ma machine** : il faut rustup + Visual Studio Build Tools (MSVC) avant tout. Premier build long (≈ 15–30 min en release).
+- ⚠️ Je suis sur **Windows 11** : la plateforme la moins rodée. Le GPU (NVIDIA) peut poser problème → rendu CPU en secours.
+- ⚠️ L'amont bouge **très** vite : un fork qui modifie le cœur sera vite en conflit. **Stratégie : fork « mince »** (voir §3).
+
+---
+
+## 2. Ce qui manque pour en faire *mon* outil de motion design avec Claude
+
+L'existant permet à Claude d'**agir** ; il est plus faible pour l'aider à **juger une animation** et à **travailler dans mon style**.
+
+| Manque | Pourquoi c'est important | Réponse prévue |
+|---|---|---|
+| Claude ne voit qu'**une image à la fois** (`render_frame`) | Le motion design se juge dans le temps (rythme, easing, enchaînements). | Outil `render_filmstrip` (planche contact de N images avec timecodes) + `render_clip` (GIF/MP4 court basse résolution) + `plot_curves` (graphe des courbes de valeur/vitesse en image). |
+| Pas de **vocabulaire métier** haut niveau | « Fais une entrée de titre élastique » = 15 appels bas niveau. | Bibliothèque de **recettes** (scripts JS / `batch`) exposées en outils MCP et en *prompts* MCP : titre, lower third, logo sting, transitions, compteur, kinetic typo, formats réseaux. |
+| Pas de **charte graphique** | Chaque projet doit respecter mes couleurs, polices, durées, marges. | `brand_kit.json` (couleurs, polices, logo, safe areas, easing préférés) lu par une ressource MCP `mymotion://brand` et appliqué par les recettes. |
+| Pas de **contexte partagé « ce que je regarde »** | En mode bridge, Claude doit deviner ce que je pointe. | Outil `focus_context` : comp active, CTI, calques/keyframes/propriétés sélectionnés, zone de travail, + capture du viewer — en un seul appel. |
+| Pas de **revue des changements** | Je dois voir ce que Claude a modifié avant d'accepter. | `diff_since {checkpoint}` lisible (calques/propriétés/keyframes ajoutés, modifiés, supprimés) en s'appuyant sur l'historique et le JSON `.ecproj` ; marqueurs « Claude » dans l'historique. |
+| Démarrage MCP lent / fragile | Le `.mcp.json` fourni lance `cargo run` (compile au démarrage → timeout). | Binaire compilé une fois, `.mcp.json` pointant sur `target\release\effectcraft-cli.exe` avec racines de lecture/écriture vers mon dossier de projets. |
+| Pas de **Skill Claude** dédié | Claude redécouvre les conventions (temps de calque vs comp, chemins de propriétés…) à chaque session. | Un skill `motion-design` : conventions de l'outil, pièges (docs/agents.md « Pitfalls »), principes d'animation (anticipation, overshoot, timing 12/24 images…), ma charte, mes recettes. |
+
+---
+
+## 3. Mes choix (réponses du 18 octobre 2026)
+
+| Question | Réponse | Conséquence sur le plan |
+|---|---|---|
+| Type de motion design | **Typographie animée, contenus verticaux réseaux, logos, explainers, data-viz** | Recettes centrées sur texte, formes, 9:16, graphiques animés à partir de données. La 3D, le VFX/compositing, le Roto Brush, le tracking et l'interop Premiere passent hors périmètre. |
+| Formats d'export | **MP4, WebM avec transparence, GIF** | Trois presets d'export prioritaires (H.264, VP9 + alpha, GIF) ; ProRes, Lottie, HEVC/AV1 restent disponibles mais ne sont ni mis en avant ni testés en priorité. |
+| Mode de travail avec Claude | **Voir l'app s'animer en direct** | Le **mode bridge** (`effectcraft --control 9877` + `mcp --bridge 9877`) devient le mode principal : stabilité de l'app sous Windows, `focus_context` et retour visuel en direct passent en tête du MVP. |
+| Usage | **Distribuer l'outil** | Rebranding **obligatoire** avant toute diffusion, installeur Windows à mon nom, connexion à Claude en un clic pour les utilisateurs, et maintenance à long terme du fork. |
+
+Encore sans réponse, et à trancher plus tard (ça ne bloque pas les phases 0 et 1) : **projets After Effects `.aep` à reprendre ?** (supposé : non) et **production en série** de déclinaisons (supposé : oui pour les formats réseaux, d'où les templates en phase 2).
+
+---
+
+## 4. Stratégie de fork (distribuer sans se noyer dans les conflits)
+
+1. **Ne pas toucher au cœur** (`crates/render`, `effects`, `project`…) sauf correctif de bug, que je propose aussi en PR à l'amont.
+2. Mettre mes ajouts dans des **zones à moi** :
+   - `extensions/mymotion/` : scripts JS, panneaux ScriptUI, presets `.ecpreset`, recettes ;
+   - un **crate séparé** `crates/mymotion-mcp` (surcouche MCP qui délègue à l'automation existante) pour les nouveaux outils ;
+   - `mymotion/` (hors workspace Cargo) : charte, templates `.ectemplate`, skill Claude, docs.
+3. **Branches** : `main` = miroir de `upstream/main` ; `perso` = mes ajouts, mergée chaque semaine avec l'amont ; `release` = versions que je distribue, taguées (`v0.1.0-mymotion`…), après test de non-régression.
+4. **Rebranding concentré** : l'identité de l'app est presque toute dans `crates/engine/src/links.rs` (`APP_NAME`, `APP_SLUG`, liens Discord/site/GitHub, apps sœurs) et dans `packaging/` (installeur WiX `packaging/windows/*.wxs`, identifiants `ai.storyteller.effectcraft`). Je garde les noms de crates `effectcraft-*` pour que les merges restent simples.
+
+---
+
+## 5. Phases (réordonnées)
+
+Estimations en heures de travail avec Claude (agent), pour une personne qui pilote et valide.
+
+### Phase 0 — Mise en route en mode live (≈ 3–6 h) · *à faire tout de suite*
+
+- [ ] Installer **rustup** (stable ≥ 1.95, `x86_64-pc-windows-msvc`) et **Visual Studio Build Tools** (C++).
+- [ ] `cargo build --release -p effectcraft -p effectcraft-cli`.
+- [ ] Lancer `effectcraft.exe --control 9877 --demo` ; tester le **compositeur GPU sous Windows** (risque #613 sur Direct3D 12) ; si ça plante, trouver le réglage CPU / Vulkan et le noter.
+- [ ] Créer `D:\MotionProjects\` (projets, médias, rendus).
+- [ ] Config Claude (Claude Desktop et Claude Code) sur le **binaire compilé** (pas `cargo run`) :
+  - `effectcraft-app` (principal) : `effectcraft-cli.exe mcp --bridge 9877` ;
+  - `effectcraft` (secours headless, rendus) : `effectcraft-cli.exe mcp --autosave --automation-read-root D:\MotionProjects --automation-write-root D:\MotionProjects\out`.
+- [ ] Raccourci Windows « App + Claude » qui lance l'app avec `--control 9877`.
+- [ ] Test complet en direct : Claude crée un titre vertical 1080×1920 de 4 s pendant que je regarde, puis exporte MP4, WebM alpha et GIF.
+
+**Critère de sortie** : je vois Claude construire l'animation dans la fenêtre, et les 3 exports fonctionnent sous Windows.
+
+### Phase 1 — MVP « on anime à deux, en direct » (≈ 20–35 h)
+
+1. **`focus_context`** (bridge) : comp active, CTI, calques/propriétés/keyframes sélectionnés, zone de travail et capture du viewer en un seul appel → « anime *ce* calque » fonctionne.
+2. **Inspection temporelle** pour que Claude juge le mouvement :
+   - `render_filmstrip {comp?, from?, to?, frames, max_side}` : planche contact avec timecodes ;
+   - `plot_curves {layer, path}` : graphe valeur/vitesse en image (juger l'easing) ;
+   - `preview_play {from?, to?}` : lance la prévisualisation dans l'app pour que je voie le résultat sans toucher à rien.
+3. **Journal d'activité visible** : chaque action de Claude étiquetée « Claude : … » dans l'historique, avec un checkpoint avant chaque demande et un retour arrière en un clic (`history goto`).
+4. **Skill Claude `motion-design`** : conventions EffectCraft (chemins de propriétés, temps de calque vs comp, `batch` atomique), boucle « construire → planche contact → critiquer → corriger », principes d'animation pour la typo et les logos (anticipation, overshoot, décalage entre lettres, rythme 8–12 images).
+5. **Charte** `mymotion/brand_kit.json` (couleurs, polices, logo, easing préférés) + ressource MCP `mymotion://brand`.
+6. **Presets d'export** : « Réseaux MP4 H.264 1080×1920 », « WebM VP9 alpha », « GIF optimisé » ; vérifier la qualité du GIF (palette, tramage, poids) et la lecture du WebM alpha dans Chrome/Firefox.
+
+**Critère de sortie** : je sélectionne un texte, je dis « fais-le rebondir lettre par lettre, plus nerveux à l'entrée », Claude l'anime sous mes yeux, me montre la courbe et ajuste.
+
+### Phase 2 — Recettes pour mes 5 types de contenu (≈ 30–50 h)
+
+Recettes = scripts JS paramétrables dans `extensions/mymotion/recipes/`, exposées en outils MCP (`recipe_list`, `recipe_apply {name, params}`) et dans un panneau ScriptUI pour l'utilisateur.
+
+| Domaine | Recettes |
+|---|---|
+| **Typographie animée** | apparition par lettre/mot/ligne (fondu, glissement, rebond, machine à écrire), kinetic typography sur rythme, mot mis en valeur, texte qui suit un tracé. |
+| **Vertical réseaux** | gabarits 9:16 avec **safe areas** TikTok / Reels / Shorts, **sous-titres animés** mot par mot (à partir d'un SRT ou d'un texte minuté), call-to-action, hook des 2 premières secondes, recadrage 16:9 → 9:16 / 1:1 / 4:5. |
+| **Logos** | révélations (tracé du contour puis remplissage, masque, morceaux qui s'assemblent), boucle de logo, version courte « sting » ; import SVG/AI déjà supporté. |
+| **Explainers** | enchaînement de scènes, icônes animées, flèches et callouts, numéros d'étapes, transitions entre scènes, calage sur une voix off (marqueurs posés sur l'audio). |
+| **Data-viz** | **nouvel import de données** CSV/JSON → barres, courbes, camemberts/donuts, compteurs de chiffres, barres de progression, classements animés (« bar chart race »), avec légendes et axes aux couleurs de la charte. |
+
+Plus : **templates Essential Graphics** (`.ectemplate`) pour les formats récurrents et **rendu par lots** (`template_render_batch` : un CSV → N vidéos), en s'appuyant sur `effectcraft-cli render --template … --values …` qui existe déjà.
+
+**Critère de sortie** : « fais-moi la vidéo verticale des chiffres du trimestre à partir de ce CSV » produit un MP4 conforme à la charte, sans retouche manuelle.
+
+### Phase 3 — Distribution (≈ 25–45 h) · *obligatoire avant de partager*
+
+1. **Nouveau nom et nouvelle identité** (à choisir) : ni « ArtCraft », ni « Claude » (marque d'Anthropic), ni « After Effects » dans le nom. Modifier `links.rs`, l'About, l'écran d'accueil, le menu Aide, le bouton Discord ; supprimer `docs/brand/` et les mentions ArtCraft du README ; nouvelle icône (l'icône actuelle est sous MIT/Apache, mais en avoir une à moi évite la confusion).
+2. **Mentions légales** : conserver `LICENSE-MIT`, `LICENSE-APACHE`, `NOTICE` (en y ajoutant « basé sur EffectCraft par l'équipe ArtCraft » et mes modifications), `ATTRIBUTION.md` ; ajouter les attributions de mes propres assets (`cargo xtask assets`).
+3. **Installeur Windows** : adapter `packaging/windows/*.wxs` (nom, identifiants, dossier d'installation), tester l'installation propre et la mise à jour ; **signature de code** (certificat à acheter) sinon SmartScreen avertit les utilisateurs.
+4. **« Connecter à Claude » en un clic** : commande dans l'app qui écrit la config MCP de Claude Desktop (`claude_desktop_config.json`) avec le bon chemin vers `effectcraft-cli.exe` et le port bridge, et qui vérifie la connexion. Livrer le **skill `motion-design`** avec l'outil.
+5. **Page de téléchargement** (releases GitHub de mon fork) avec notes de version ; décider si le fork devient public ou si je distribue seulement les binaires.
+6. **CI GitHub Actions** à moi (l'amont n'en a pas sur les PR) : `cargo xtask ci` + build MSI à chaque tag.
+
+**Critère de sortie** : un utilisateur installe le MSI, clique « Connecter à Claude », et Claude anime dans son app.
+
+### Phase 4 — Itérations
+
+- Support d'autres utilisateurs : remontée de bugs, mises à jour, merge hebdomadaire de l'amont, tests de non-régression sur les recettes.
+- Plug-ins d'effets WebAssembly à moi (looks signature, grain, glitch).
+- Contribution en amont des correctifs Windows (moins de code à maintenir dans mon fork).
+- macOS / Linux : les scripts de packaging existent ; à activer seulement si des utilisateurs le demandent.
+
+### Hors périmètre (masqué, pas supprimé)
+
+3D avancée, VFX/compositing, Roto Brush, face tracking, interop Premiere (EDL/FCPXML/AAF), effets audio, ProRes et Lottie (disponibles mais non mis en avant). Rien n'est supprimé du code, pour garder des merges faciles.
+
+---
+
+## 6. Risques
+
+| Risque | Probabilité | Impact | Parade |
+|---|---|---|---|
+| Bugs/crash **sous Windows en mode live** (GPU D3D12, interactions) | Élevée | **Élevé** (c'est le mode principal) | Diagnostic en phase 0, rendu CPU en secours, `--autosave`, corrections remontées à l'amont. |
+| **Alpha** : bugs d'effets, de texte, de masques | Élevée | Moyen | Mes recettes n'utilisent qu'un sous-ensemble testé ; tests de non-régression par recette. |
+| **Support utilisateurs** d'un logiciel alpha | Élevée | Élevé | Annoncer clairement « bêta », canal de bugs, versions taguées et testées. |
+| **Dérive de l'amont** (≈ 800 commits/semaine) | Certaine | Moyen | Fork mince, ajouts dans des fichiers nouveaux, merge hebdomadaire, branche `release` figée. |
+| **Marques** (ArtCraft, Claude, Adobe) | Moyenne si négligé | Juridique | Rebranding complet en phase 3 avant toute diffusion ; nom neutre. |
+| Installeur non signé | Certaine sans certificat | Moyen (confiance) | Certificat de signature de code. |
+| Export lent (pas d'accélération matérielle) | Moyenne | Faible-moyen | Formats courts (réseaux) ; rendus de travail en basse résolution. |
+| Qualité/poids des **GIF** | Moyenne | Moyen | Vérification en phase 1 ; preset optimisé (palette, fps réduit). |
+
+## 7. Effort total estimé
+
+| Phase | Effort | Cumul |
+|---|---:|---:|
+| 0 — Mise en route en mode live | 3–6 h | 3–6 h |
+| 1 — MVP « on anime à deux, en direct » | 20–35 h | ≈ 25–40 h |
+| 2 — Recettes (typo, vertical, logos, explainers, data-viz) | 30–50 h | ≈ 55–90 h |
+| 3 — Distribution | 25–45 h | ≈ 80–135 h |
+| 4 — Itérations et support | continu | — |
+
+## 8. Prochaines décisions
+
+1. **Le nom** du logiciel (pour la phase 3, pas bloquant avant).
+2. Fork **public** ou distribution des **binaires seuls** ?
+3. Projets **After Effects `.aep`** à reprendre ? (supposé : non)
