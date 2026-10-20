@@ -64,7 +64,8 @@ L'existant permet à Claude d'**agir** ; il est plus faible pour l'aider à **ju
 
 | Question | Réponse | Conséquence sur le plan |
 |---|---|---|
-| Type de motion design | **Typographie animée, contenus verticaux réseaux, logos, explainers, data-viz** | Recettes centrées sur texte, formes, 9:16, graphiques animés à partir de données. La 3D, le VFX/compositing, le Roto Brush, le tracking et l'interop Premiere passent hors périmètre. |
+| Type de motion design | **Typographie animée, contenus verticaux réseaux, logos, explainers, data-viz** | Recettes centrées sur texte, formes, 9:16, graphiques animés à partir de données. |
+| 3D et effets spéciaux (choix du 20/10/2026) | **Logos et produits 3D, scènes et décors 3D, VFX sur vidéo tournée, simulations** — pipeline **Blender + EffectCraft** | Blender (déjà piloté par Claude via MCP) fait la vraie 3D et les simulations ; EffectCraft compose, fait les VFX sur vidéo et la finition. Nouvelle phase 2b. L'interop Premiere reste hors périmètre. |
 | Formats d'export | **MP4, WebM avec transparence, GIF** | Trois presets d'export prioritaires (H.264, VP9 + alpha, GIF) ; ProRes, Lottie, HEVC/AV1 restent disponibles mais ne sont ni mis en avant ni testés en priorité. |
 | Mode de travail avec Claude | **Voir l'app s'animer en direct** | Le **mode bridge** (`effectcraft --control 9877` + `mcp --bridge 9877`) devient le mode principal : stabilité de l'app sous Windows, `focus_context` et retour visuel en direct passent en tête du MVP. |
 | Usage | **Distribuer l'outil** | Rebranding **obligatoire** avant toute diffusion, installeur Windows à mon nom, connexion à Claude en un clic pour les utilisateurs, et maintenance à long terme du fork. |
@@ -147,6 +148,52 @@ Plus : **templates Essential Graphics** (`.ectemplate`) pour les formats récurr
 
 **Critère de sortie** : « fais-moi la vidéo verticale des chiffres du trimestre à partir de ce CSV » produit un MP4 conforme à la charte, sans retouche manuelle.
 
+### Phase 2b — 3D et effets spéciaux : pipeline Blender ↔ EffectCraft (≈ 60–110 h)
+
+**Pourquoi deux logiciels** : la 3D d'EffectCraft (Classic / Advanced 3D, modèles glTF/OBJ/STL/FBX
+statiques, caméras, lumières, ombres douces, profondeur de champ) et ses outils VFX (Keylight, suivi de
+points, 3D Camera Tracker, Warp Stabilizer, Roto Brush IA, Object Matte, Content-Aware Fill, particules,
+EXR multicouche, Cryptomatte) existent, mais sont estimés **≈ 35 % prêts pour un usage pro** par leurs
+auteurs (pas de reflets entre objets, pas d'animation FBX, comportement non comparé à After Effects).
+Advanced 3D rend à ≈ 0,8 s par image HD sur la RTX 2060. **Blender** apporte la vraie 3D (modélisation,
+matériaux, Cycles/EEVEE, simulations, suivi de caméra libmv) ; Claude pilote déjà Blender via MCP.
+
+**Répartition**
+
+| Étape | Outil | Exemples |
+|---|---|---|
+| Modélisation, matériaux, éclairage, simulations | Blender | logo en volume, packshot, décor, fumée/feu/fluides/destruction, tissus |
+| Rendu 3D | Blender (Cycles, OptiX sur la RTX) | séquences **EXR multicouches** : beauty, ombres, AO, profondeur, Cryptomatte, alpha |
+| Suivi de caméra d'un plan tourné | Blender (libmv) en priorité, 3D Camera Tracker d'EffectCraft en secours | intégrer de la 3D dans une vidéo réelle |
+| Compositing, VFX, titres, motion design, étalonnage, export | EffectCraft | fond vert, rotoscopie, incrustation, lueurs, grain, typo animée |
+
+**À construire dans `mymotion`**
+1. **Dossier projet étendu** : `3d/` (fichiers `.blend`), `renders/` (séquences EXR/PNG), `footage/`
+   (plans tournés) ; sections du brief « 3D / VFX » (modèles, plans, simulations, contraintes de rendu).
+2. **`import_render {path, comp?}`** : importe une séquence de rendu Blender et monte ses passes
+   (beauty, ombres en multiplication, AO, profondeur pour la profondeur de champ / brouillard,
+   Cryptomatte pour isoler un objet) dans une comp prête à étalonner.
+3. **Caméra partagée** : `camera_from_blender` (animation de caméra Blender → caméra 3D EffectCraft,
+   conversion focale ↔ zoom, unités, repère) pour placer titres et éléments 2D dans la scène 3D ;
+   `camera_to_blender` (solution du 3D Camera Tracker → caméra Blender) pour intégrer de la 3D dans un plan tourné.
+4. **Réglages de rendu Blender standard** (via le MCP Blender) : EXR multicouche 16 bits, passes,
+   gestion des couleurs linéaire/AgX alignée avec l'espace de travail d'EffectCraft (32 bpc linéaire).
+5. **Recettes 3D** : logo en volume (extrusion, biseau, métal/verre, reflet qui passe), rotation produit
+   (turntable), survol de décor, révélation par particules.
+6. **Recettes VFX** : fond vert (Keylight + nettoyage + étalonnage d'intégration), suivi de points et
+   incrustation, remplacement d'écran, rotoscopie IA, intégration 3D dans plan tourné, simulations
+   Blender composées dans la vidéo.
+7. **Contrôle qualité** : planches contact et comparaisons avant/après (plan brut, masque, résultat) pour que
+   Claude juge les détourages et l'intégration (bords, grain, lumière).
+
+**Matériel** : la RTX 2060 (6 Go) et 16 Go de RAM suffisent pour des logos, packshots et des simulations
+légères ; pour des décors lourds ou des simulations fines, prévoir des rendus de nuit, 32 Go de RAM, ou une
+ferme de rendu.
+
+**Critère de sortie** : « fais un logo SN en verre qui se révèle dans une salle futuriste, puis incruste-le
+sur ce plan tourné » : Claude construit la 3D dans Blender, rend les passes, compose et finit dans
+EffectCraft, et livre le MP4.
+
 ### Phase 3 — Distribution (≈ 25–45 h) · *obligatoire avant de partager*
 
 1. **Nouveau nom et nouvelle identité** (à choisir) : ni « ArtCraft », ni « Claude » (marque d'Anthropic), ni « After Effects » dans le nom. Modifier `links.rs`, l'About, l'écran d'accueil, le menu Aide, le bouton Discord ; supprimer `docs/brand/` et les mentions ArtCraft du README ; nouvelle icône (l'icône actuelle est sous MIT/Apache, mais en avoir une à moi évite la confusion).
@@ -167,7 +214,7 @@ Plus : **templates Essential Graphics** (`.ectemplate`) pour les formats récurr
 
 ### Hors périmètre (masqué, pas supprimé)
 
-3D avancée, VFX/compositing, Roto Brush, face tracking, interop Premiere (EDL/FCPXML/AAF), effets audio, ProRes et Lottie (disponibles mais non mis en avant). Rien n'est supprimé du code, pour garder des merges faciles.
+Interop Premiere (EDL/FCPXML/AAF), effets audio, Lottie (disponibles mais non mis en avant). La 3D, les VFX, le Roto Brush et le tracking entrent dans le périmètre (phase 2b) ; ProRes 4444 et les séquences EXR servent d'intermédiaires entre Blender et EffectCraft. Rien n'est supprimé du code, pour garder des merges faciles.
 
 ---
 
@@ -183,6 +230,9 @@ Plus : **templates Essential Graphics** (`.ectemplate`) pour les formats récurr
 | Installeur non signé | Certaine sans certificat | Moyen (confiance) | Certificat de signature de code. |
 | Export lent (pas d'accélération matérielle) | Moyenne | Faible-moyen | Formats courts (réseaux) ; rendus de travail en basse résolution. |
 | Qualité/poids des **GIF** | Moyenne | Moyen | Vérification en phase 1 ; preset optimisé (palette, fps réduit). |
+| **3D / VFX d'EffectCraft encore jeunes** (≈ 35 % prêts) | Élevée | Élevé | La vraie 3D et le suivi de caméra dans Blender ; EffectCraft pour le compositing ; tests sur de vrais plans avant tout engagement client. |
+| **Puissance de calcul** (RTX 2060 6 Go, 16 Go RAM) | Élevée pour les décors et simulations lourds | Moyen | Rendus de nuit, résolution de travail réduite, passage à 32 Go de RAM ou ferme de rendu si besoin. |
+| **Couleurs entre Blender et EffectCraft** | Moyenne | Moyen | Flux EXR linéaire et réglages standard des deux côtés (phase 2b, point 4). |
 
 ## 7. Effort total estimé
 
@@ -191,7 +241,8 @@ Plus : **templates Essential Graphics** (`.ectemplate`) pour les formats récurr
 | 0 — Mise en route en mode live | 3–6 h | 3–6 h |
 | 1 — MVP « on anime à deux, en direct » | 20–35 h | ≈ 25–40 h |
 | 2 — Recettes (typo, vertical, logos, explainers, data-viz) | 30–50 h | ≈ 55–90 h |
-| 3 — Distribution | 25–45 h | ≈ 80–135 h |
+| 2b — 3D et effets spéciaux (Blender ↔ EffectCraft) | 60–110 h | ≈ 115–200 h |
+| 3 — Distribution | 25–45 h | ≈ 140–245 h |
 | 4 — Itérations et support | continu | — |
 
 ## 8. Prochaines décisions
@@ -199,3 +250,5 @@ Plus : **templates Essential Graphics** (`.ectemplate`) pour les formats récurr
 1. **Le nom** du logiciel (pour la phase 3, pas bloquant avant).
 2. Fork **public** ou distribution des **binaires seuls** ?
 3. Projets **After Effects `.aep`** à reprendre ? (supposé : non)
+4. **Ordre** : finir le spot SN (musique, déclinaisons) avant la phase 2b, ou attaquer la 3D tout de suite ?
+5. **Matériel** : RAM 32 Go / ferme de rendu si les décors et simulations deviennent lourds.
