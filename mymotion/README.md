@@ -44,9 +44,10 @@ par exemple `--autosave`, `--project F.ecproj`, `--automation-read-root DIR`).
 - `vectorize_logo {input, output?, precision?, color?}` : logo PNG → SVG propre (pour l'extruder en 3D).
 - `camera_from_blender {json, comp?, name?}` : recrée la caméra Blender (export_camera de la recette) dans la comp, image par image, avec des nulls 3D pour les repères : les titres 2D en 3D s'alignent au pixel sur le rendu.
 - `replace_screen {layer, content, comp?, color?, time?, expand?}` : remplacement d'écran vert/bleu (détection, suivi 4 points, corner pin, détourage Key Light) en un appel.
+- `camera_to_blender {camera, json, comp?, origin?, normal?, scale?, twoNode?}` : exporte la caméra résolue par le 3D Camera Tracker vers Blender (recette `import_camera`), recalée sur le sol suivi ; projection identique au pixel près (vérifié sur 12 points).
 - `render_before_after {layers, comp?, times?, max_side?}` : planche avant/après (effets coupés/actifs) pour juger un VFX.
 
-Recettes Blender : `mymotion/blender/mymotion_blender.py` (`setup_render`, `logo_from_svg`, `studio_lights`, `camera_push`, `export_camera`), à exécuter via le MCP Blender.
+Recettes Blender : `mymotion/blender/mymotion_blender.py` (`setup_render`, `logo_from_svg`, `studio_lights`, `camera_push`, `export_camera`, `import_camera`), à exécuter via le MCP Blender.
 
 ## Chartes par client et par projet
 

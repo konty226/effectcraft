@@ -64,7 +64,16 @@ Dossiers du projet : `3d/` (.blend), `renders/` (séquences), `footage/` (plans 
    (coordonnées d'un repère) ou `layer.setParent` sur le null. Échelle : 1 m Blender = 100 px à la profondeur 0 ;
    **la perspective agrandit** un calque proche de la caméra (×≈2,8 à 9 m avec un 50 mm en 1080×1920) : réduis la taille
    du texte en conséquence et vérifie qu'il reste dans le cadre en début ET en fin de mouvement.
-6. **Contrôle** : `render_filmstrip` sur la comp ; vérifie le **contraste objet/fond** (un logo bleu sur fond
+6. **3D dans un plan tourné (matchmove)** : dans une comp « plan » à la taille du plan, `track.camera {layer, wait: true}`
+   puis `camera.solveStatus` (erreur moyenne < 1 px ; si l'angle de vue est absurde, ex. 140° pour un drone, refais avec
+   `effects/#1/shotType` = 2 et `horizontalAngleOfView` réaliste) ; `camera.points {time}` → choisis des points du sol
+   près du centre → `camera.selectPoints` + `camera.setGroundPlane` (le sol devient le plan y = 0) → `camera.create` ;
+   `camera_to_blender {camera: "3D Tracker Camera", json, origin: [0,0,0], normal: [0,-1,0]}` ; dans Blender
+   `import_camera(json)` (résolution, cadence, plage réglées), objets posés sur z = 0, sol `is_shadow_catcher`, soleil
+   orienté comme les ombres du plan, `setup_render` puis rendu en arrière-plan ; `import_render {path, comp: <plan>}`
+   (mettre les calques à l'échelle si le rendu est plus petit que le plan), flou léger + grain pour coller au plan.
+   Vérifie que l'objet est dans le cadre du début à la fin (aperçus Blender à 3 instants) et qu'il reste « collé » au sol.
+7. **Contrôle** : `render_filmstrip` sur la comp ; vérifie le **contraste objet/fond** (un logo bleu sur fond
    bleu se perd : faces plus claires ou chromées, fond assombri derrière), le cadrage dans les safe areas et
    le contact au sol (ombre).
 

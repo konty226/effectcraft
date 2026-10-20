@@ -8,6 +8,9 @@ puis appeler les fonctions.
     camera_push(start=(-2.2, -10.5, 1.9), end=(0.9, -8.6, 1.3), target=(0, 0, 1.0), frames=(1, 90), lens=50)
     export_camera(json_path, objects=("Repere titre",), points={"sol_centre": (0, 0, 0)}, scale=100)
         → caméra + repères pour l'outil camera_from_blender de mymotion (titres 2D dans la scène 3D)
+    import_camera(json_path)
+        → caméra animée depuis l'outil camera_to_blender de mymotion (solution du 3D Camera Tracker :
+          intégrer de la 3D dans un plan tourné ; le sol suivi est le plan z = 0)
 
 Pièges Blender 5.2 déjà traités :
 - l'EXR multicouche se choisit avec image_settings.media_type = "MULTI_LAYER_IMAGE" puis
@@ -229,4 +232,47 @@ def export_camera(json_path, objects=(), points=None, scale=100.0, camera=None, 
     with open(json_path, "w", encoding="utf-8") as fh:
         json.dump(out, fh, ensure_ascii=False, indent=1)
     return {"json": json_path, "frames": len(out["frames"]), "zoom_first": out["frames"][0]["zoom"] if out["frames"] else None}
+
+
+def import_camera(json_path, name="Camera suivie", set_scene=True):
+    """Caméra animée image par image depuis le JSON de camera_to_blender (matrices monde Blender,
+    focale en mm pour un capteur de 36 mm en largeur). Règle aussi la résolution, la cadence et
+    la plage d'images de la scène."""
+    import json
+    from mathutils import Matrix
+
+    d = json.load(open(json_path, encoding="utf-8"))
+    sc = bpy.context.scene
+    cd = bpy.data.cameras.new(name)
+    cd.sensor_fit = "HORIZONTAL"
+    cd.sensor_width = d.get("sensor_width_mm", 36.0)
+    cd.clip_start, cd.clip_end = 0.05, 2000
+    cam = bpy.data.objects.new(name, cd)
+    sc.collection.objects.link(cam)
+    prev = None
+    for fr in d["frames"]:
+        f = fr["f"]
+        m = Matrix(fr["matrix_world"])
+        loc, q, _ = m.decompose()
+        e = q.to_euler("XYZ", prev) if prev is not None else q.to_euler("XYZ")
+        prev = e
+        cam.location, cam.rotation_euler = loc, e
+        cam.keyframe_insert("location", frame=f)
+        cam.keyframe_insert("rotation_euler", frame=f)
+        cd.lens = fr["lens_mm"]
+        cd.keyframe_insert("lens", frame=f)
+    if set_scene:
+        sc.camera = cam
+        r = sc.render
+        r.resolution_x, r.resolution_y = int(d["width"]), int(d["height"])
+        r.fps = round(d["fps"])
+        r.fps_base = round(d["fps"]) / d["fps"]
+        sc.frame_start, sc.frame_end = d.get("frame_start", 1), d.get("frame_end", len(d["frames"]))
+    for ob in (cam, cd):
+        ad = ob.animation_data
+        if ad and ad.action:
+            for fc in getattr(ad.action, "fcurves", []):
+                for k in fc.keyframe_points:
+                    k.interpolation = "LINEAR"
+    return cam
 

@@ -269,6 +269,24 @@ const DEFS: &[Def] = &[
         required: &["layers"],
         read_only: true,
     },
+    Def {
+        name: "camera_to_blender",
+        title: "Camera to Blender",
+        description: "Write an EffectCraft camera (typically the 3D Camera Tracker's solved camera, one-node and keyed per frame) as a JSON that mymotion_blender.import_camera turns into an animated Blender camera, so 3D objects rendered in Blender sit in the filmed shot. The world is re-based on the tracked ground: `origin` (EffectCraft world point, e.g. the solve's ground plane centre) becomes Blender's origin and `normal` its +Z, with 1 m = `scale` px. Frames span the comp's work area.",
+        props: || {
+            json!({
+                "camera": {"description": "Camera layer (id, name or #n)."},
+                "json": {"type": "string", "description": "Output JSON path (usually <project>/3d/camera_<shot>_solve.json)."},
+                "comp": {"type": "string", "description": "Composition (default: the active one)."},
+                "origin": {"type": "array", "description": "Ground origin [x, y, z] in EffectCraft world px (default: comp centre at z 0)."},
+                "normal": {"type": "array", "description": "Ground normal [x, y, z] (default [0, -1, 0], i.e. world up)."},
+                "scale": {"type": "number", "description": "EffectCraft px per Blender metre (default 100)."},
+                "twoNode": {"type": "boolean", "description": "Use the point of interest (two-node camera); default false."}
+            })
+        },
+        required: &["camera", "json"],
+        read_only: false,
+    },
 ];
 
 pub fn is_ours(name: &str) -> bool {
@@ -331,6 +349,7 @@ pub fn run(p: &Proxy, name: &str, args: &Value) -> Value {
         "camera_from_blender" => camera_from_blender(p, args).map(|v| vec![text_content(&v)]),
         "replace_screen" => replace_screen(p, args).map(|v| vec![text_content(&v)]),
         "render_before_after" => render_before_after(p, args),
+        "camera_to_blender" => camera_to_blender(p, args).map(|v| vec![text_content(&v)]),
         _ => Err(format!("unknown tool {name}")),
     };
     match r {
@@ -1223,6 +1242,151 @@ fn render_before_after(p: &Proxy, a: &Value) -> Result<Vec<Value>, String> {
     Ok(vec![text_content(&json!({"comp": info.id, "times": times, "layers": layers})), image_content(&sheet)?])
 }
 
+// ---- camera to Blender ----
+
+type V3 = [f64; 3];
+
+fn sub3(a: V3, b: V3) -> V3 {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+fn dot3(a: V3, b: V3) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+fn cross3(a: V3, b: V3) -> V3 {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+fn norm3(a: V3) -> V3 {
+    let l = dot3(a, a).sqrt();
+    if l < 1e-12 { a } else { [a[0] / l, a[1] / l, a[2] / l] }
+}
+fn mat_mul(a: [[f64; 3]; 3], b: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let mut r = [[0.0; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            r[i][j] = (0..3).map(|k| a[i][k] * b[k][j]).sum();
+        }
+    }
+    r
+}
+fn rot(axis: usize, deg: f64) -> [[f64; 3]; 3] {
+    let (s, c) = deg.to_radians().sin_cos();
+    match axis {
+        0 => [[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]],
+        1 => [[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]],
+        _ => [[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]],
+    }
+}
+fn col(m: &[[f64; 3]; 3], j: usize) -> V3 {
+    [m[0][j], m[1][j], m[2][j]]
+}
+
+/// EffectCraft (After Effects) camera basis in world space: right, down, forward. One-node cameras:
+/// orientation (X, then Y, then Z) × Z × Y × X rotations, looking along local +z (crates/geom
+/// `layer_3d`); two-node cameras look at their point of interest with up = −y.
+fn ae_camera_basis(orientation: V3, rot_xyz: V3, poi: Option<V3>, pos: V3) -> (V3, V3, V3) {
+    if let Some(poi) = poi {
+        let f = norm3(sub3(poi, pos));
+        let up = if cross3(f, [0.0, -1.0, 0.0]).iter().all(|v| v.abs() < 1e-9) { [0.0, 0.0, 1.0] } else { [0.0, -1.0, 0.0] };
+        let r = norm3(cross3(up, f));
+        let u = cross3(f, r);
+        let (x, y) = ([-r[0], -r[1], -r[2]], [-u[0], -u[1], -u[2]]);
+        // Two-node roll is the Z rotation about the view axis.
+        let (s, c) = (-rot_xyz[2]).to_radians().sin_cos();
+        let xr = [x[0] * c + y[0] * s, x[1] * c + y[1] * s, x[2] * c + y[2] * s];
+        let yr = [y[0] * c - x[0] * s, y[1] * c - x[1] * s, y[2] * c - x[2] * s];
+        return (xr, yr, f);
+    }
+    let o = mat_mul(mat_mul(rot(2, orientation[2]), rot(1, orientation[1])), rot(0, orientation[0]));
+    let m = mat_mul(mat_mul(mat_mul(o, rot(2, rot_xyz[2])), rot(1, rot_xyz[1])), rot(0, rot_xyz[0]));
+    (col(&m, 0), col(&m, 1), col(&m, 2))
+}
+
+/// One property of a layer over time: its keys `(time, value)`, or one static value at time 0.
+fn prop_track(p: &Proxy, layer: &Value, path: &str) -> Result<Vec<(f64, Vec<f64>)>, String> {
+    let r = json_of(&p.call("get_property", json!({"layer": layer, "path": path, "time": 0}))?);
+    let keys: Vec<(f64, Vec<f64>)> = r
+        .get("keys")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|k| Some((k.get("compTime").or_else(|| k.get("time"))?.as_f64()?, numbers(k.get("value")?)?)))
+        .collect();
+    if keys.is_empty() {
+        let v = numbers(r.get("value").unwrap_or(&Value::Null)).ok_or_else(|| format!("{path} is not numeric"))?;
+        return Ok(vec![(0.0, v)]);
+    }
+    Ok(keys)
+}
+
+/// Value of a sampled track at `t` (nearest earlier key; tracks from the 3D tracker are keyed per frame).
+fn at(track: &[(f64, Vec<f64>)], t: f64) -> Vec<f64> {
+    track.iter().rev().find(|(kt, _)| *kt <= t + 1e-6).or(track.first()).map(|(_, v)| v.clone()).unwrap_or_default()
+}
+
+fn v3(v: &[f64]) -> V3 {
+    [v.first().copied().unwrap_or(0.0), v.get(1).copied().unwrap_or(0.0), v.get(2).copied().unwrap_or(0.0)]
+}
+
+fn camera_to_blender(p: &Proxy, a: &Value) -> Result<Value, String> {
+    if let Some(c) = a_str(a, "comp") {
+        p.call("command_run", json!({"id": "comp.open", "params": {"comp": c}}))?;
+    }
+    let info = comp_info(p, &json!({}))?;
+    let camera = a.get("camera").cloned().ok_or("camera_to_blender: `camera` (the camera layer) is required")?;
+    let out = PathBuf::from(a_str(a, "json").ok_or("camera_to_blender: `json` (output path) is required")?);
+    let scale = num(a, "scale").filter(|s| *s > 0.0).unwrap_or(100.0);
+    let pos_t = prop_track(p, &camera, "transform/position")?;
+    let ori_t = prop_track(p, &camera, "transform/orientation").unwrap_or_else(|_| vec![(0.0, vec![0.0; 3])]);
+    let rx_t = prop_track(p, &camera, "transform/rotationX").unwrap_or_else(|_| vec![(0.0, vec![0.0])]);
+    let ry_t = prop_track(p, &camera, "transform/rotationY").unwrap_or_else(|_| vec![(0.0, vec![0.0])]);
+    let rz_t = prop_track(p, &camera, "transform/rotation").unwrap_or_else(|_| vec![(0.0, vec![0.0])]);
+    let zoom_t = prop_track(p, &camera, "cameraOptions/zoom")?;
+    let poi_t = prop_track(p, &camera, "transform/poi").ok();
+    let two_node = a.get("twoNode").and_then(Value::as_bool).unwrap_or(false);
+    // Ground: origin and "up" normal (pointing towards the camera), in EffectCraft world coordinates.
+    let origin = a.get("origin").and_then(xyz).unwrap_or([info.width / 2.0, info.height / 2.0, 0.0]);
+    let mut up = a.get("normal").and_then(xyz).map(norm3).unwrap_or([0.0, -1.0, 0.0]);
+    let cam0 = v3(&at(&pos_t, info.work.0));
+    if dot3(up, sub3(cam0, origin)) < 0.0 {
+        up = [-up[0], -up[1], -up[2]];
+    }
+    // Blender basis expressed in EffectCraft world: z_b = up, x_b = world +x made perpendicular, y_b = z × x.
+    let mut xb = sub3([1.0, 0.0, 0.0], [up[0] * up[0], up[0] * up[1], up[0] * up[2]]);
+    if dot3(xb, xb) < 1e-6 {
+        xb = sub3([0.0, 0.0, 1.0], [up[2] * up[0], up[2] * up[1], up[2] * up[2]]);
+    }
+    let xb = norm3(xb);
+    let yb = cross3(up, xb);
+    let to_b = |v: V3| [dot3(v, xb), dot3(v, yb), dot3(v, up)];
+    let n = ((info.work.1 - info.work.0) * info.fps).round().max(1.0) as usize;
+    let mut frames = vec![];
+    for i in 0..n {
+        let t = info.work.0 + i as f64 / info.fps;
+        let pos = v3(&at(&pos_t, t));
+        let poi = if two_node { poi_t.as_ref().map(|pt| v3(&at(pt, t))) } else { None };
+        let (r, d, f) = ae_camera_basis(
+            v3(&at(&ori_t, t)),
+            [at(&rx_t, t).first().copied().unwrap_or(0.0), at(&ry_t, t).first().copied().unwrap_or(0.0), at(&rz_t, t).first().copied().unwrap_or(0.0)],
+            poi,
+            pos,
+        );
+        let pb = to_b(sub3(pos, origin));
+        let (rb, db, fb) = (to_b(r), to_b(d), to_b(f));
+        // Blender camera: local X = right, local Y = up (= −down), local Z = −forward.
+        let m = [[rb[0], -db[0], -fb[0], pb[0] / scale], [rb[1], -db[1], -fb[1], pb[1] / scale], [rb[2], -db[2], -fb[2], pb[2] / scale], [0.0, 0.0, 0.0, 1.0]];
+        let zoom = at(&zoom_t, t).first().copied().unwrap_or(1.0);
+        frames.push(json!({"f": i + 1, "time": t, "matrix_world": m, "lens_mm": 36.0 * zoom / info.width, "zoom": zoom}));
+    }
+    let data = json!({
+        "source": "EffectCraft", "comp": info.name, "width": info.width, "height": info.height, "fps": info.fps,
+        "frame_start": 1, "frame_end": n, "scale": scale, "sensor_width_mm": 36.0, "sensor_fit": "HORIZONTAL",
+        "ground": {"origin": origin, "normal": up}, "frames": frames,
+    });
+    project::write(&out, &serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?)?;
+    Ok(json!({"json": out, "frames": n, "fps": info.fps, "size": [info.width, info.height], "ground": {"origin": origin, "normal": up},
+        "hint": "In Blender: import_camera(json) from mymotion_blender.py, then build the 3D on the ground plane z = 0 around the origin (1 m = `scale` px), render with film transparent + shadow catcher, and import_render the result over the footage."}))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1243,6 +1407,18 @@ mod tests {
         assert_eq!(defs.len(), DEFS.len());
         assert!(defs.iter().all(|d| d["inputSchema"]["additionalProperties"] == json!(false)));
         assert!(is_ours("plot_curves") && !is_ours("render_frame"));
+    }
+
+    #[test]
+    fn camera_basis() {
+        let (r, d, f) = ae_camera_basis([0.0; 3], [0.0; 3], None, [0.0; 3]);
+        assert!((r[0] - 1.0).abs() < 1e-9 && (d[1] - 1.0).abs() < 1e-9 && (f[2] - 1.0).abs() < 1e-9);
+        // Pan 90° about Y: forward turns to +x.
+        let (_, _, f) = ae_camera_basis([0.0, 90.0, 0.0], [0.0; 3], None, [0.0; 3]);
+        assert!((f[0] - 1.0).abs() < 1e-9);
+        // Two-node looking down +z from the default position matches the one-node basis.
+        let (r2, d2, f2) = ae_camera_basis([0.0; 3], [0.0; 3], Some([0.0, 0.0, 10.0]), [0.0; 3]);
+        assert!((r2[0] - 1.0).abs() < 1e-9 && (d2[1] - 1.0).abs() < 1e-9 && (f2[2] - 1.0).abs() < 1e-9);
     }
 
     #[test]
