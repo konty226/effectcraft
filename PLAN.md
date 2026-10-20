@@ -170,7 +170,7 @@ matériaux, Cycles/EEVEE, simulations, suivi de caméra libmv) ; Claude pilote d
 **Fait (20/10/2026)** : premier essai complet (logo SN vectorisé → extrudé dans Blender 5.2 → Cycles 90 images EXR
 multicouche en 12 min 45 → composé dans EffectCraft) ; puis industrialisé : dossiers `3d/`, `renders/`, `footage/` et
 section « 3D et VFX » du brief, outils `import_render` (passes empilées automatiquement) et `vectorize_logo`, recettes
-Blender `mymotion/blender/mymotion_blender.py`, skill « 3D et VFX ». Reste : caméra partagée (point 3), recettes 3D/VFX
+Blender `mymotion/blender/mymotion_blender.py`, skill « 3D et VFX ». Caméra partagée Blender → EffectCraft faite (`export_camera` + `camera_from_blender`, écart mesuré < 1 px, titres 3D du spot SN). Reste : sens inverse EffectCraft → Blender (3D Camera Tracker), recettes 3D/VFX
 (points 5–6), contrôle qualité avant/après (point 7).
 
 **À construire dans `mymotion`**

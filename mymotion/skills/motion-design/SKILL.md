@@ -27,6 +27,9 @@ Chaque travail est un **projet** : `clients/<Client>/projets/<Projet>/` avec `BR
   Utilise les fichiers de `assets/` en priorité sur toute image trouvée ailleurs.
 - **Respecte le script** : textes exacts, ordre et minutage de `SCRIPT.md`. Si tu proposes un
   changement, demande-le d'abord.
+- **Retour en arrière** : `checkpoint` ne vit que le temps de la session du serveur MCP et l'historique d'annulation
+  de l'app ne garde que 32 étapes : avant une grosse modification, sauvegarde aussi une copie du projet
+  (`save_project {path: "<Projet> avant <étape>.ecproj"}` puis rouvre l'original).
 - **Garde la trace** : `brief_update {section: "notes", content, append: true}` pour chaque
   décision, retour ou version (date, fichier). Les réponses de l'utilisateur vont dans leur section.
 - Sauvegarde le projet sous `saveProjectAs` (dans le dossier du projet) et les rendus dans son `out/`.
@@ -54,7 +57,14 @@ Dossiers du projet : `3d/` (.blend), `renders/` (séquences), `footage/` (plans 
    passe d'ombre (Shadow Catcher), pose la beauty par-dessus et liste les passes (Depth, Mist, AO,
    Cryptomatte) ; ajoute fond, titres, lueurs, grain comme pour le reste. Les autres passes s'extraient
    avec l'effet EXtractoR (`red/green/blue` = `ViewLayer.Mist.Z`…).
-5. **Contrôle** : `render_filmstrip` sur la comp ; vérifie le **contraste objet/fond** (un logo bleu sur fond
+5. **Titres 2D dans la scène 3D (caméra partagée)** : dans Blender, `export_camera(<projet>/3d/camera_<plan>.json,
+   objects=(<empties ou objets à suivre>), points={"nom": (x, y, z)})` (après `exec` de la recette) ; dans EffectCraft,
+   `camera_from_blender {json}` dans la comp du rendu : caméra à deux nœuds clé par image + nulls 3D pour les repères
+   (alignement mesuré < 1 px). Puis `layer.newText` + `layer.setSwitch {switch: "threeD", value: true}` + position 3D
+   (coordonnées d'un repère) ou `layer.setParent` sur le null. Échelle : 1 m Blender = 100 px à la profondeur 0 ;
+   **la perspective agrandit** un calque proche de la caméra (×≈2,8 à 9 m avec un 50 mm en 1080×1920) : réduis la taille
+   du texte en conséquence et vérifie qu'il reste dans le cadre en début ET en fin de mouvement.
+6. **Contrôle** : `render_filmstrip` sur la comp ; vérifie le **contraste objet/fond** (un logo bleu sur fond
    bleu se perd : faces plus claires ou chromées, fond assombri derrière), le cadrage dans les safe areas et
    le contact au sol (ombre).
 

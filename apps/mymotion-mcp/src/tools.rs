@@ -221,6 +221,20 @@ const DEFS: &[Def] = &[
         required: &["input"],
         read_only: false,
     },
+    Def {
+        name: "camera_from_blender",
+        title: "Camera from Blender",
+        description: "Recreate a Blender camera in the active (or given) composition from the JSON written by mymotion_blender.export_camera: a two-node camera keyed on every frame (position, point of interest, zoom, roll), plus 3D nulls for the exported markers (Blender objects followed frame by frame, and fixed points), so 2D titles, shapes and footage placed in 3D line up with the Blender render (import_render) and move with its perspective. Time 0 of the comp = Blender frame_start.",
+        props: || {
+            json!({
+                "json": {"type": "string", "description": "Camera JSON written by export_camera (usually <project>/3d/camera_<shot>.json)."},
+                "comp": {"type": "string", "description": "Composition to add the camera to (default: the active one)."},
+                "name": {"type": "string", "description": "Camera layer name (default Camera Blender)."}
+            })
+        },
+        required: &["json"],
+        read_only: false,
+    },
 ];
 
 pub fn is_ours(name: &str) -> bool {
@@ -280,6 +294,7 @@ pub fn run(p: &Proxy, name: &str, args: &Value) -> Value {
         "project_list" => project_list(p, args).map(|v| vec![text_content(&v)]),
         "import_render" => import_render(p, args).map(|v| vec![text_content(&v)]),
         "vectorize_logo" => vectorize_logo(args).map(|v| vec![text_content(&v)]),
+        "camera_from_blender" => camera_from_blender(p, args).map(|v| vec![text_content(&v)]),
         _ => Err(format!("unknown tool {name}")),
     };
     match r {
@@ -940,6 +955,98 @@ fn vectorize_logo(a: &Value) -> Result<Value, String> {
     });
     project::write(&output, &svg)?;
     Ok(json!({"svg": output, "contours": contours, "points": points, "size": [img.width(), img.height()]}))
+}
+
+// ---- Blender camera ----
+
+fn xyz(v: &Value) -> Option<[f64; 3]> {
+    let a = v.as_array()?;
+    Some([a.first()?.as_f64()?, a.get(1)?.as_f64()?, a.get(2)?.as_f64()?])
+}
+
+/// Keys for a per-frame track, or one static value when it never moves.
+fn track_keys(times: &[f64], values: &[[f64; 3]]) -> Option<Vec<(f64, Value)>> {
+    let first = values.first()?;
+    let moves = values.iter().any(|v| v.iter().zip(first).any(|(a, b)| (a - b).abs() > 1e-3));
+    if !moves {
+        return None;
+    }
+    Some(times.iter().zip(values).map(|(t, v)| (*t, json!(v))).collect())
+}
+
+fn camera_from_blender(p: &Proxy, a: &Value) -> Result<Value, String> {
+    let path = PathBuf::from(a_str(a, "json").ok_or("camera_from_blender: `json` must be a string")?);
+    let data: Value = serde_json::from_str(&project::read(&path)?).map_err(|e| format!("{} is not valid JSON: {e}", path.display()))?;
+    let fps = data.get("fps").and_then(Value::as_f64).filter(|f| *f > 0.0).ok_or("camera JSON without `fps`")?;
+    let f0 = data.get("frame_start").and_then(Value::as_f64).unwrap_or(1.0);
+    let frames = data.get("frames").and_then(Value::as_array).filter(|f| !f.is_empty()).ok_or("camera JSON without `frames`")?;
+    let times: Vec<f64> = frames.iter().map(|f| ((f.get("f").and_then(Value::as_f64).unwrap_or(f0) - f0) / fps * 1000.0).round() / 1000.0).collect();
+    let pos: Vec<[f64; 3]> = frames.iter().filter_map(|f| f.get("position").and_then(xyz)).collect();
+    let poi: Vec<[f64; 3]> = frames.iter().filter_map(|f| f.get("poi").and_then(xyz)).collect();
+    let zoom: Vec<f64> = frames.iter().filter_map(|f| f.get("zoom").and_then(Value::as_f64)).collect();
+    let roll: Vec<f64> = frames.iter().map(|f| f.get("roll").and_then(Value::as_f64).unwrap_or(0.0)).collect();
+    if pos.len() != frames.len() || poi.len() != frames.len() || zoom.len() != frames.len() {
+        return Err("camera JSON: every frame needs position, poi and zoom".into());
+    }
+    if let Some(c) = a_str(a, "comp") {
+        p.call("command_run", json!({"id": "comp.open", "params": {"comp": c}}))?;
+    }
+    let name = a_str(a, "name").unwrap_or("Camera Blender");
+    let made = json_of(&p.call(
+        "command_run",
+        json!({"id": "layer.newCamera", "params": {"name": name, "type": "twoNode", "zoom": zoom[0], "position": pos[0], "poi": poi[0]}}),
+    )?);
+    let cam = made.get("layer").cloned().unwrap_or(json!(name));
+    let add = |layer: &Value, path: &str, keys: Vec<(f64, Value)>| -> Result<(), String> {
+        let keys: Vec<Value> = keys.into_iter().map(|(t, v)| json!({"time": t, "value": v})).collect();
+        p.call("add_keyframe", json!({"layer": layer, "path": path, "keys": keys, "interpolation": "linear"}))?;
+        Ok(())
+    };
+    if let Some(k) = track_keys(&times, &pos) {
+        add(&cam, "transform/position", k)?;
+    }
+    if let Some(k) = track_keys(&times, &poi) {
+        add(&cam, "transform/poi", k)?;
+    }
+    if zoom.iter().any(|z| (z - zoom[0]).abs() > 0.5) {
+        add(&cam, "cameraOptions/zoom", times.iter().zip(&zoom).map(|(t, z)| (*t, json!(z))).collect())?;
+    }
+    // Blender roll is counter-clockwise seen from behind the camera; After Effects' Z rotation is clockwise on screen.
+    if roll.iter().any(|r| r.abs() > 0.01) {
+        add(&cam, "transform/rotation", times.iter().zip(&roll).map(|(t, r)| (*t, json!(-r))).collect())?;
+    }
+    // Markers: 3D nulls that follow the Blender objects, and fixed points.
+    let mut nulls = Map::new();
+    let mut make_null = |label: &str, values: &[[f64; 3]]| -> Result<(), String> {
+        let Some(first) = values.first() else { return Ok(()) };
+        let made = json_of(&p.call("command_run", json!({"id": "layer.newNull", "params": {"name": format!("3D {label}")}}))?);
+        let id = made.get("layer").cloned().unwrap_or(json!(format!("3D {label}")));
+        p.call("command_run", json!({"id": "layer.setSwitch", "params": {"layers": [id], "switch": "threeD", "value": true}}))?;
+        p.call("set_property", json!({"layer": id, "path": "transform/position", "value": first}))?;
+        if let Some(k) = track_keys(&times, values) {
+            add(&id, "transform/position", k)?;
+        }
+        nulls.insert(label.to_string(), json!({"layer": id, "start": first, "end": values.last()}));
+        Ok(())
+    };
+    if let Some(objs) = data.get("objects").and_then(Value::as_object) {
+        for (n, v) in objs {
+            let vals: Vec<[f64; 3]> = v.as_array().into_iter().flatten().filter_map(xyz).collect();
+            make_null(n, &vals)?;
+        }
+    }
+    if let Some(pts) = data.get("points").and_then(Value::as_object) {
+        for (n, v) in pts {
+            if let Some(pt) = xyz(v) {
+                make_null(n, &[pt])?;
+            }
+        }
+    }
+    Ok(json!({
+        "camera": cam, "frames": frames.len(), "fps": fps, "zoom": zoom[0], "scale": data.get("scale"),
+        "size": [data.get("width"), data.get("height")], "markers": nulls,
+        "hint": "To put a title in the scene: layer.newText, layer.setSwitch threeD, then either set transform/position to a marker's coordinates or layer.setParent {layers, parent: <marker null>} and set its position to [0,0,0] relative offset. 1 Blender metre = `scale` px at depth 0; keep the comp's time 0 = Blender frame_start.",
+    }))
 }
 
 #[cfg(test)]

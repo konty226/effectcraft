@@ -6,6 +6,8 @@ puis appeler les fonctions.
     logo_from_svg(svg_path, width_m=3.2, depth_m=0.11, bevel_m=0.012, color="#0957a2")
     studio_lights(sweep=True, frames=(28, 78))
     camera_push(start=(-2.2, -10.5, 1.9), end=(0.9, -8.6, 1.3), target=(0, 0, 1.0), frames=(1, 90), lens=50)
+    export_camera(json_path, objects=("Repere titre",), points={"sol_centre": (0, 0, 0)}, scale=100)
+        → caméra + repères pour l'outil camera_from_blender de mymotion (titres 2D dans la scène 3D)
 
 Pièges Blender 5.2 déjà traités :
 - l'EXR multicouche se choisit avec image_settings.media_type = "MULTI_LAYER_IMAGE" puis
@@ -171,3 +173,60 @@ def camera_push(start=(-2.2, -10.5, 1.9), end=(0.9, -8.6, 1.3), target=(0, 0, 1.
     cam.location = end
     cam.keyframe_insert("location", frame=frames[1])
     return cam
+
+
+def to_effectcraft(p, w, h, scale):
+    """Point Blender (Z en haut, mètres) → EffectCraft / After Effects (Y vers le bas, Z en profondeur,
+    pixels). L'origine du monde Blender tombe au centre de la comp, à la profondeur 0."""
+    return [round(w / 2 + scale * p[0], 3), round(h / 2 - scale * p[2], 3), round(scale * p[1], 3)]
+
+
+def export_camera(json_path, objects=(), points=None, scale=100.0, camera=None, frames=None, aim=10.0):
+    """Échantillonne la caméra active à chaque image (position, point visé, zoom en pixels, roulis) et la
+    position monde de `objects` (empties, objets) ; `points` = repères fixes {nom: (x, y, z)}.
+    `scale` = pixels par mètre dans EffectCraft (100 : un objet de 1 m fait 100 px à la profondeur 0)."""
+    import json
+    from mathutils import Vector
+
+    sc = bpy.context.scene
+    cam = camera or sc.camera
+    r = sc.render
+    w = round(r.resolution_x * r.resolution_percentage / 100)
+    h = round(r.resolution_y * r.resolution_percentage / 100)
+    f0, f1 = frames or (sc.frame_start, sc.frame_end)
+    out = {"source": bpy.data.filepath, "camera": cam.name, "width": w, "height": h, "fps": r.fps / r.fps_base,
+           "frame_start": f0, "frame_end": f1, "scale": scale, "frames": [], "objects": {}, "points": {}}
+    obs = [bpy.data.objects[n] for n in objects]
+    for n in objects:
+        out["objects"][n] = []
+    keep = sc.frame_current
+    for f in range(f0, f1 + 1):
+        sc.frame_set(f)
+        mw = cam.matrix_world
+        pos = mw.translation.copy()
+        rot = mw.to_3x3()
+        fwd = (rot @ Vector((0, 0, -1))).normalized()
+        up = (rot @ Vector((0, 1, 0))).normalized()
+        # Roulis : écart entre le haut de la caméra et le haut « sans roulis » (monde Z projeté).
+        ref = Vector((0, 0, 1)) - fwd * fwd.dot(Vector((0, 0, 1)))
+        roll = 0.0
+        if ref.length > 1e-6:
+            ref.normalize()
+            roll = math.degrees(math.atan2(fwd.dot(ref.cross(up)), ref.dot(up)))
+        # Zoom After Effects = distance (px) à laquelle la largeur de la comp couvre le champ horizontal.
+        corners = cam.data.view_frame(scene=sc)
+        half_w = max(abs(v.x) for v in corners)
+        depth = abs(corners[0].z) or 1.0
+        zoom = (w / 2) / (half_w / depth)
+        out["frames"].append({"f": f, "position": to_effectcraft(pos, w, h, scale),
+                              "poi": to_effectcraft(pos + fwd * aim, w, h, scale),
+                              "zoom": round(zoom, 3), "roll": round(roll, 4)})
+        for o in obs:
+            out["objects"][o.name].append(to_effectcraft(o.matrix_world.translation, w, h, scale))
+    sc.frame_set(keep)
+    for n, p in (points or {}).items():
+        out["points"][n] = to_effectcraft(p, w, h, scale)
+    with open(json_path, "w", encoding="utf-8") as fh:
+        json.dump(out, fh, ensure_ascii=False, indent=1)
+    return {"json": json_path, "frames": len(out["frames"]), "zoom_first": out["frames"][0]["zoom"] if out["frames"] else None}
+
