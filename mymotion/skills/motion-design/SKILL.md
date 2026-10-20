@@ -34,6 +34,39 @@ Chaque travail est un **projet** : `clients/<Client>/projets/<Projet>/` avec `BR
   téléchargement ; note auteur, page et licence dans `assets/SOURCES.md`. Écarte les images avec
   logos de marques ou enseignes lisibles.
 
+## 3D et VFX : Blender + EffectCraft
+
+La **vraie 3D** (modélisation, matériaux, simulations, suivi de caméra) se fait dans **Blender**
+(MCP Blender, `execute_blender_code`) ; **EffectCraft** compose, fait les VFX sur vidéo et la finition.
+Dossiers du projet : `3d/` (.blend), `renders/` (séquences), `footage/` (plans tournés).
+
+1. **Logo en 3D** : `vectorize_logo {input: <PNG>, color}` (si pas de SVG fourni), puis dans Blender :
+   `exec(open(r"D:/Fork/effectcraft/mymotion/blender/mymotion_blender.py", encoding="utf-8").read())`
+   et `logo_from_svg(svg)`, `studio_lights()`, `camera_push()`, `setup_render(<projet>/renders/<plan>)`.
+   Sauvegarde le .blend dans `3d/`.
+2. **Aperçu avant le vrai rendu** : une image à 40 % et 24 échantillons (`bpy.ops.render.render(write_still=True)`
+   en PNG), regarde-la, corrige matériaux/cadrage. Compte ~8–9 s par image 1080×1920 à 96 échantillons
+   (Cycles, RTX 2060) : préviens l'utilisateur de la durée.
+3. **Rendu** dans un Blender séparé en arrière-plan (commande système) :
+   `blender.exe -b <projet>/3d/<fichier>.blend -a`, pour ne pas bloquer l'interface ; suis la progression
+   au nombre d'images dans `renders/`.
+4. **Compositing** : `import_render {path: <dossier ou name_[0001-0090].exr>}` crée la comp, multiplie la
+   passe d'ombre (Shadow Catcher), pose la beauty par-dessus et liste les passes (Depth, Mist, AO,
+   Cryptomatte) ; ajoute fond, titres, lueurs, grain comme pour le reste. Les autres passes s'extraient
+   avec l'effet EXtractoR (`red/green/blue` = `ViewLayer.Mist.Z`…).
+5. **Contrôle** : `render_filmstrip` sur la comp ; vérifie le **contraste objet/fond** (un logo bleu sur fond
+   bleu se perd : faces plus claires ou chromées, fond assombri derrière), le cadrage dans les safe areas et
+   le contact au sol (ombre).
+
+Pièges Blender 5.2 (déjà gérés par la recette) : EXR multicouche = `media_type = "MULTI_LAYER_IMAGE"` puis
+`file_format = "OPEN_EXR_MULTILAYER"` ; passe d'ombre dans `view_layer.cycles.use_pass_shadow_catcher` ;
+EXR multipart (EffectCraft lit la passe Combined comme image). Si le MCP Blender ne répond pas sur 9876,
+lance Blender avec `--python-expr` qui exécute `bpy.ops.blmcp.server_start()` après 3 s.
+
+VFX sur vidéo tournée (dans EffectCraft) : Key Light (fond vert) + nettoyage, suivi de points, 3D Camera
+Tracker (ou suivi de caméra Blender, plus robuste), Roto Brush / Object Matte, Content-Aware Fill ; toujours
+montrer avant/après en planche contact.
+
 ## Démarrage de session
 
 1. `focus_context` : comp active, temps courant, calques/propriétés/clés **sélectionnés par

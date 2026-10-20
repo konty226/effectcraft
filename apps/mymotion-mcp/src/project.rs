@@ -19,7 +19,7 @@ use crate::brand::{self, Brands};
 pub const PROJECTS: &str = "projets";
 pub const BRIEF: &str = "BRIEF.md";
 pub const SCRIPT: &str = "SCRIPT.md";
-pub const FOLDERS: [&str; 4] = ["assets", "references", "moodboard", "out"];
+pub const FOLDERS: [&str; 7] = ["assets", "references", "moodboard", "footage", "3d", "renders", "out"];
 
 /// The brief's sections, in order, with the hint shown under each empty one.
 pub const SECTIONS: &[(&str, &str)] = &[
@@ -33,6 +33,13 @@ pub const SECTIONS: &[(&str, &str)] = &[
     (
         "Style",
         "- Direction artistique :\n- Couleurs propres au projet :\n- Typographie :\n- Rythme / énergie :\n- Transitions :\n- Niveau d'effets :\n- Musique / son :",
+    ),
+    (
+        "3D et VFX",
+        "- Modèles / logos à mettre en 3D :
+- Plans tournés à truquer (footage/) :
+- Simulations (particules, fumée, fluides…) :
+- Moteur et qualité de rendu (EEVEE / Cycles, échantillons) :",
     ),
     ("Contraintes et mentions obligatoires", "_Mentions légales, logos partenaires, à éviter absolument._"),
     ("Livrables", "- MP4 (réseaux) :\n- WebM transparent :\n- GIF :\n- Autres :"),
@@ -163,6 +170,7 @@ pub fn missing(dir: &Path, brief: &Brief) -> Vec<String> {
             "assetsfournis" => !has_files("assets"),
             "referencesetexemples" => !has_files("references"),
             "moodboard" => !has_files("moodboard"),
+            "3detvfx" => !(has_files("3d") || has_files("footage") || has_files("renders")),
             "script" => !script_filled,
             _ => true,
         })
@@ -234,7 +242,9 @@ pub fn read(path: &Path) -> Result<String, String> {
 pub fn kind(path: &Path) -> &'static str {
     let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
     match ext.as_str() {
-        "png" | "jpg" | "jpeg" | "bmp" | "gif" | "tif" | "tiff" | "webp" | "exr" | "tga" => "image",
+        "png" | "jpg" | "jpeg" | "bmp" | "gif" | "tif" | "tiff" | "webp" | "tga" => "image",
+        "exr" => "exr",
+        "blend" => "blender",
         "svg" | "ai" | "eps" | "pdf" => "vector",
         "psd" | "psb" => "photoshop",
         "mp4" | "mov" | "webm" | "mkv" | "avi" | "mxf" | "m4v" => "video",
@@ -276,6 +286,48 @@ pub fn inventory(dir: &Path) -> Vec<Value> {
     }
     let mut out = vec![];
     walk(dir, dir, 0, &mut out);
+    group_sequences(out)
+}
+
+/// `name_0001.exr` … `name_0090.exr` → one `{path: "name_[0001-0090].exr", kind: "sequence", frames}`.
+fn split_frame(path: &str) -> Option<(String, String, String)> {
+    let (stem, ext) = path.rsplit_once('.')?;
+    let digits = stem.chars().rev().take_while(char::is_ascii_digit).count();
+    if digits < 3 || digits == stem.len() {
+        return None;
+    }
+    let (head, num) = stem.split_at(stem.len() - digits);
+    Some((head.to_string(), num.to_string(), ext.to_string()))
+}
+
+fn group_sequences(files: Vec<Value>) -> Vec<Value> {
+    use std::collections::BTreeMap;
+    let mut groups: BTreeMap<(String, String), Vec<(String, Value)>> = BTreeMap::new();
+    let mut out = vec![];
+    for v in files {
+        let path = v["path"].as_str().unwrap_or_default().to_string();
+        match split_frame(&path) {
+            Some((head, num, ext)) => groups.entry((head, ext)).or_default().push((num, v)),
+            None => out.push(v),
+        }
+    }
+    for ((head, ext), mut frames) in groups {
+        if frames.len() < 3 {
+            out.extend(frames.into_iter().map(|(_, v)| v));
+            continue;
+        }
+        frames.sort_by(|a, b| a.0.cmp(&b.0));
+        let (first, last) = (frames[0].0.clone(), frames[frames.len() - 1].0.clone());
+        let bytes: u64 = frames.iter().map(|(_, v)| v["bytes"].as_u64().unwrap_or(0)).sum();
+        let mut v = frames[0].1.clone();
+        v["path"] = json!(format!("{head}[{first}-{last}].{ext}"));
+        v["firstFrame"] = json!(format!("{head}{first}.{ext}"));
+        v["kind"] = json!(format!("sequence ({})", v["kind"].as_str().unwrap_or("file")));
+        v["frames"] = json!(frames.len());
+        v["bytes"] = json!(bytes);
+        out.push(v);
+    }
+    out.sort_by(|a, b| a["path"].as_str().cmp(&b["path"].as_str()));
     out
 }
 
@@ -404,6 +456,12 @@ mod tests {
         let found = of_file(&b, &d.join("Teaser.ecproj"));
         assert_eq!(found.map(|f| f.1), Some("Teaser".to_string()));
         assert_eq!(list(&b, None).len(), 1);
+        for i in 1..=5 {
+            let _ = std::fs::write(d.join(format!("renders/logo_{i:04}.exr")), b"x");
+        }
+        let inv = inventory(&d);
+        let seq = inv.iter().find(|v| v["path"] == "renders/logo_[0001-0005].exr");
+        assert!(seq.is_some_and(|v| v["frames"] == 5 && v["firstFrame"] == "renders/logo_0001.exr"), "{inv:?}");
         assert!(check_name("../x").is_err());
         let _ = std::fs::remove_dir_all(&root);
     }

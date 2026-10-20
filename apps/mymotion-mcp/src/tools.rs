@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value, json};
 
 use crate::brand::{self, Brands};
-use crate::{Proxy, b64, draw, lock, project};
+use crate::{Proxy, b64, draw, exr, lock, project, vector};
 
 pub const INSTRUCTIONS: &str = "mymotion tools (motion design with Claude): render_filmstrip shows a stretch of the animation as a captioned contact sheet, so judge timing and spacing on it rather than on one frame. plot_curves draws a property's value and speed over time with its keyframes and reports overshoot and peak speed, to judge easing. focus_context returns what the user is looking at in the live app (active comp, current time, selected layers, properties and keys) plus an image, call it first when the user says \"this\" or \"the selected layer\". checkpoint {label} before a large change, restore_checkpoint {label} to go back. brand_kit (also resource mymotion://brand) returns the brand kit to follow (colours, fonts, timing), merged studio -> client -> project; the user has several clients: check `client` in its reply, switch with brand_use, list with brand_list, create one with brand_new, and save each client's projects under clients/<client>/projets/ so the right kit applies. Every job starts from a project brief: project_new creates clients/<client>/projets/<project>/ with BRIEF.md, SCRIPT.md, assets/, references/, moodboard/ (fill what the user said, ask for the rest); project_brief reads it with a sheet of the mood board and references; brief_update records answers and feedback; project_list shows projects and what their brief lacks.";
 
@@ -189,6 +189,38 @@ const DEFS: &[Def] = &[
         required: &[],
         read_only: true,
     },
+    Def {
+        name: "import_render",
+        title: "Import 3D render",
+        description: "Import a 3D render (an image sequence, typically Blender's multi-part / multilayer OpenEXR) and stack its passes in a composition ready to finish: the Shadow Catcher pass multiplied onto what is below (if rendered), optionally Ambient Occlusion, then the beauty (Combined, with alpha) on top. Lists every pass found (Combined, Depth, Mist, AO, Shadow Catcher, Cryptomatte) so others can be extracted with the EXtractoR effect (channel names like ViewLayer.Mist.Z). `path` is the first frame, a sequence pattern from project_brief (name_[0001-0090].exr) or a folder.",
+        props: || {
+            json!({
+                "path": {"type": "string", "description": "First frame, sequence pattern or folder of the render."},
+                "fps": {"type": "number", "description": "Frame rate of the render (default 30)."},
+                "comp": {"type": "string", "description": "Add to this existing composition; default: a new comp sized like the render."},
+                "name": {"type": "string", "description": "Name of the new comp and layer prefix (default: the sequence name)."},
+                "shadow": {"type": "number", "description": "Shadow Catcher opacity 0-100 (default 85; 0 = skip)."},
+                "ao": {"type": "number", "description": "Ambient Occlusion opacity 0-100 (default 0 = skip)."}
+            })
+        },
+        required: &["path"],
+        read_only: false,
+    },
+    Def {
+        name: "vectorize_logo",
+        title: "Vectorize logo",
+        description: "Turn a raster logo (PNG with transparency, or dark logo on light background) into a clean SVG: sub-pixel contours, smoothed, holes kept (even-odd). Use it to extrude a logo in 3D in Blender (rebuild curves from its path) or as a sharp shape. Writes next to the source unless `output` is given.",
+        props: || {
+            json!({
+                "input": {"type": "string", "description": "PNG / JPEG of the logo."},
+                "output": {"type": "string", "description": "SVG to write (default: <input>_vectorise.svg)."},
+                "precision": {"type": "integer", "description": "Upsampling 2-12 (default 6; higher = finer small letters)."},
+                "color": {"type": "string", "description": "Fill colour of the SVG (default #000000)."}
+            })
+        },
+        required: &["input"],
+        read_only: false,
+    },
 ];
 
 pub fn is_ours(name: &str) -> bool {
@@ -246,6 +278,8 @@ pub fn run(p: &Proxy, name: &str, args: &Value) -> Value {
         "project_brief" => project_brief(p, args),
         "brief_update" => brief_update(p, args).map(|v| vec![text_content(&v)]),
         "project_list" => project_list(p, args).map(|v| vec![text_content(&v)]),
+        "import_render" => import_render(p, args).map(|v| vec![text_content(&v)]),
+        "vectorize_logo" => vectorize_logo(args).map(|v| vec![text_content(&v)]),
         _ => Err(format!("unknown tool {name}")),
     };
     match r {
@@ -759,6 +793,153 @@ pub fn read_resource(p: &Proxy, uri: &str) -> Option<Value> {
         Err(e) => json!({"error": e}).to_string(),
     };
     Some(json!({"contents": [{"uri": BRAND_URI, "mimeType": "application/json", "text": text}]}))
+}
+
+// ---- 3D renders ----
+
+/// The first frame and frame count of a render given as a frame, a `name_[0001-0090].exr` pattern or a folder.
+fn render_frames(path: &str) -> Result<(PathBuf, usize), String> {
+    let p = PathBuf::from(path);
+    let first = if p.is_dir() {
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&p)
+            .map_err(|e| format!("cannot read {}: {e}", p.display()))?
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|f| f.is_file() && matches!(project::kind(f), "exr" | "image"))
+            .collect();
+        files.sort();
+        files.into_iter().next().ok_or_else(|| format!("no image in {}", p.display()))?
+    } else if let (Some(open), Some(close)) = (path.find('['), path.rfind(']')) {
+        let range = path.get(open + 1..close).unwrap_or_default();
+        let start = range.split('-').next().unwrap_or_default();
+        PathBuf::from(format!("{}{start}{}", path.get(..open).unwrap_or_default(), path.get(close + 1..).unwrap_or_default()))
+    } else {
+        p
+    };
+    if !first.is_file() {
+        return Err(format!("render frame not found: {}", first.display()));
+    }
+    // Frames of the same sequence: same name with only the trailing digits changing.
+    let stem_of = |f: &Path| f.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let stem = stem_of(&first);
+    let head = stem.trim_end_matches(|c: char| c.is_ascii_digit()).to_string();
+    let ext = first.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
+    let dir = first.parent().map(Path::to_path_buf).unwrap_or_default();
+    let count = std::fs::read_dir(&dir)
+        .map(|it| {
+            it.filter_map(Result::ok)
+                .map(|e| e.path())
+                .filter(|n| {
+                    let st = stem_of(n);
+                    n.extension().is_some_and(|x| x.to_string_lossy() == ext.as_str())
+                        && st.len() > head.len()
+                        && st.starts_with(&head)
+                        && st.chars().skip(head.chars().count()).all(|c| c.is_ascii_digit())
+                })
+                .count()
+        })
+        .unwrap_or(1);
+    Ok((first, count.max(1)))
+}
+
+fn top_layer_id(p: &Proxy) -> Result<Value, String> {
+    let c = json_of(&p.call("get_comp", json!({}))?);
+    c.get("layers")
+        .and_then(Value::as_array)
+        .and_then(|l| l.first())
+        .and_then(|l| l.get("id"))
+        .cloned()
+        .ok_or_else(|| "the composition has no layer".to_string())
+}
+
+fn import_render(p: &Proxy, a: &Value) -> Result<Value, String> {
+    let path = a_str(a, "path").ok_or("import_render: `path` must be a string")?;
+    let (first, frames) = render_frames(path)?;
+    let fps = num(a, "fps").filter(|f| *f > 0.0).unwrap_or(30.0);
+    let header = if project::kind(&first) == "exr" { Some(exr::read(&first)?) } else { None };
+    let (w, h) = match &header {
+        Some(hd) if hd.width > 0 => (hd.width, hd.height),
+        _ => image::image_dimensions(&first).map_err(|e| format!("cannot read {}: {e}", first.display()))?,
+    };
+    let imported = json_of(&p.call("command_run", json!({"id": "file.import", "params": {"paths": [first.to_string_lossy()], "sequence": frames > 1}}))?);
+    let item = imported.get("items").and_then(Value::as_array).and_then(|i| i.first()).cloned().ok_or_else(|| format!("import failed: {imported}"))?;
+    if frames > 1 {
+        p.call("command_run", json!({"id": "file.interpretFootage", "params": {"items": [item], "frameRate": fps}}))?;
+    }
+    let base = a_str(a, "name").map(str::to_string).unwrap_or_else(|| {
+        let s = first.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let t = s.trim_end_matches(|c: char| c.is_ascii_digit() || c == '_' || c == '-' || c == '.').to_string();
+        if t.is_empty() { "Rendu 3D".to_string() } else { t }
+    });
+    let comp = match a_str(a, "comp") {
+        Some(c) => {
+            p.call("command_run", json!({"id": "comp.open", "params": {"comp": c}}))?;
+            json!(c)
+        }
+        None => {
+            let duration = (frames as f64 / fps * 1000.0).round() / 1000.0;
+            let r = json_of(&p.call(
+                "command_run",
+                json!({"id": "comp.new", "params": {"name": base, "width": w, "height": h, "frameRate": fps, "duration": duration, "open": true}}),
+            )?);
+            r.get("comp").cloned().unwrap_or(json!(base))
+        }
+    };
+    let mut layers = Map::new();
+    let pass = |suffix: &str| header.as_ref().and_then(|h| exr::find(h, suffix)).map(|p| p.layer.clone());
+    let mut multiply = |label: &str, layer_name: &str, opacity: f64| -> Result<(), String> {
+        p.call("command_run", json!({"id": "layer.addItem", "params": {"item": item, "index": 1}}))?;
+        let id = top_layer_id(p)?;
+        p.call("add_effect", json!({"layer": id, "effect": "EXtractoR", "values": {"red": format!("{layer_name}.R"), "green": format!("{layer_name}.G"), "blue": format!("{layer_name}.B")}}))?;
+        p.call("command_run", json!({"id": "layer.setBlendMode", "params": {"layers": [id], "mode": "Multiply"}}))?;
+        p.call("set_property", json!({"layer": id, "path": "transform/opacity", "value": opacity}))?;
+        p.call("command_run", json!({"id": "layer.rename", "params": {"layer": id, "name": format!("{base} {label}")}}))?;
+        layers.insert(label.to_string(), id);
+        Ok(())
+    };
+    let shadow = num(a, "shadow").unwrap_or(85.0).clamp(0.0, 100.0);
+    if shadow > 0.0
+        && let Some(l) = pass("Shadow Catcher")
+    {
+        multiply("ombre", &l, shadow)?;
+    }
+    let ao = num(a, "ao").unwrap_or(0.0).clamp(0.0, 100.0);
+    if ao > 0.0
+        && let Some(l) = pass("Ambient Occlusion")
+    {
+        multiply("AO", &l, ao)?;
+    }
+    p.call("command_run", json!({"id": "layer.addItem", "params": {"item": item, "index": 1}}))?;
+    let beauty = top_layer_id(p)?;
+    p.call("command_run", json!({"id": "layer.rename", "params": {"layer": beauty, "name": format!("{base} beauty")}}))?;
+    layers.insert("beauty".into(), beauty);
+    let passes: Vec<Value> = header
+        .as_ref()
+        .map(|h| h.passes.iter().filter(|p| !p.layer.to_lowercase().contains("noisy")).map(|p| json!({"layer": p.layer, "channels": p.channels})).collect())
+        .unwrap_or_default();
+    Ok(json!({
+        "comp": comp, "item": item, "firstFrame": first, "frames": frames, "fps": fps, "size": [w, h],
+        "layers": layers, "passes": passes,
+        "cryptomatte": header.as_ref().map(|h| h.cryptomatte.clone()).unwrap_or_default(),
+        "hint": "Other passes: layer.addItem the same item, then add_effect EXtractoR with red/green/blue set to <layer>.Z (depth, mist) or <layer>.R/G/B.",
+    }))
+}
+
+fn vectorize_logo(a: &Value) -> Result<Value, String> {
+    let input = PathBuf::from(a_str(a, "input").ok_or("vectorize_logo: `input` must be a string")?);
+    let img = image::open(&input).map_err(|e| format!("cannot read {}: {e}", input.display()))?.to_rgba8();
+    let k = int(a, "precision", 6, 2, 12) as usize;
+    let color = a_str(a, "color").unwrap_or("#000000");
+    let (svg, contours, points) = vector::to_svg(&vector::coverage(&img), k, color);
+    if contours == 0 {
+        return Err(format!("no shape found in {} (transparent or uniform image?)", input.display()));
+    }
+    let output = a_str(a, "output").map(PathBuf::from).unwrap_or_else(|| {
+        let stem = input.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "logo".into());
+        input.with_file_name(format!("{stem}_vectorise.svg"))
+    });
+    project::write(&output, &svg)?;
+    Ok(json!({"svg": output, "contours": contours, "points": points, "size": [img.width(), img.height()]}))
 }
 
 #[cfg(test)]

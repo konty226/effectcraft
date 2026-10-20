@@ -17,8 +17,10 @@
 mod b64;
 mod brand;
 mod draw;
+mod exr;
 mod project;
 mod tools;
+mod vector;
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};

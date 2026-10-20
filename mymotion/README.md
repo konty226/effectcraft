@@ -40,6 +40,10 @@ par exemple `--autosave`, `--project F.ecproj`, `--automation-read-root DIR`).
 - `checkpoint {label}`, `checkpoints {}`, `restore_checkpoint {label}` : points de retour dans l'historique (sans perdre les branches).
 - `brand_kit {client?}`, `brand_list {}`, `brand_use {client|null}`, `brand_new {client, from?}` : chartes par client et par projet (ci-dessous).
 - `project_new {client, project, brief?, script?}`, `project_brief {client?, project?, images?}`, `brief_update {section, content, append?}`, `project_list {client?}` : dossiers projet avec brief (ci-dessous).
+- `import_render {path, fps?, comp?, name?, shadow?, ao?}` : importe un rendu 3D (EXR multicouche Blender), empile ombre / AO / beauty et liste les passes.
+- `vectorize_logo {input, output?, precision?, color?}` : logo PNG → SVG propre (pour l'extruder en 3D).
+
+Recettes Blender : `mymotion/blender/mymotion_blender.py` (`setup_render`, `logo_from_svg`, `studio_lights`, `camera_push`), à exécuter via le MCP Blender.
 
 ## Chartes par client et par projet
 
@@ -69,6 +73,9 @@ clients\<Client>\projets\<Projet>\
   assets\      fichiers fournis (logos, photos, vidéos, musique, voix off, polices)
   references\  exemples (images, vidéos, liens.txt)
   moodboard\   images d'ambiance
+  footage\     plans tournés à truquer
+  3d\          fichiers Blender (.blend)
+  renders\     séquences de rendu (EXR)
   out\         rendus
   <Projet>.ecproj
 ```
