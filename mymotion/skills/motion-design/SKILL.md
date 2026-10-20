@@ -73,9 +73,19 @@ Pièges Blender 5.2 (déjà gérés par la recette) : EXR multicouche = `media_t
 EXR multipart (EffectCraft lit la passe Combined comme image). Si le MCP Blender ne répond pas sur 9876,
 lance Blender avec `--python-expr` qui exécute `bpy.ops.blmcp.server_start()` après 3 s.
 
-VFX sur vidéo tournée (dans EffectCraft) : Key Light (fond vert) + nettoyage, suivi de points, 3D Camera
-Tracker (ou suivi de caméra Blender, plus robuste), Roto Brush / Object Matte, Content-Aware Fill ; toujours
-montrer avant/après en planche contact.
+VFX sur vidéo tournée (dans EffectCraft), plans dans `footage/` :
+- **Toujours une comp « plan » à la taille du plan** (footage à 100 %, centré), puis l'imbriquer dans la comp
+  de livraison (ex. 1440×2732 → 1080×1920 à 75 %).
+- **Remplacement d'écran** (téléphone, ordinateur, TV à écran vert/bleu) : `replace_screen {layer, content}`
+  détecte l'écran, suit ses 4 coins (tracker perspective), applique le corner pin au contenu (placé sous le plan)
+  et détoure le vert (Key Light). Vérifie avec `render_before_after {layers: [<plan>]}` ; liseré de couleur →
+  augmente `expand` ; contenu qui déborde du cadre → diminue-le.
+- **Fond vert d'une personne** : Key Light (`effect.pickColor` sur le vert, `screenMatte/clipBlack|clipWhite`,
+  despill), puis nouveau décor dessous ; refuse les plans où le sujet porte la couleur du fond.
+- **Suivi** : `track.new {kind: transform|perspective, target}` → `track.setPoint` → `track.analyze {wait: true}`
+  → `track.apply` ; 3D Camera Tracker (`track.camera`) ou suivi de caméra Blender pour intégrer de la 3D.
+- Rotoscopie : Roto Brush / Object Matte ; nettoyage : Content-Aware Fill.
+- Plans trouvés sur le web : libres de droits seulement, avec accord, sources dans `footage/SOURCES.md`.
 
 ## Démarrage de session
 

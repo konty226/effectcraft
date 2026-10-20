@@ -235,6 +235,40 @@ const DEFS: &[Def] = &[
         required: &["json"],
         read_only: false,
     },
+    Def {
+        name: "replace_screen",
+        title: "Replace screen",
+        description: "Screen replacement on footage in one call: finds the green (or blue) screen of a phone, laptop or TV on a reference frame, puts a 4-point perspective tracker on its corners (pushed `expand` px outward to hide rounded corners under the bezel), analyses the whole shot, applies the corner pin to the content (a comp, footage item or layer, placed under the footage) and keys the screen colour out with Key Light. The footage layer must fill its comp 1:1 (work in a comp made from the footage, then nest it).",
+        props: || {
+            json!({
+                "layer": {"description": "Footage layer showing the screen."},
+                "content": {"description": "What goes on the screen: a composition or footage item name/id, or a layer of this comp."},
+                "comp": {"type": "string", "description": "Composition holding the footage (default: the active one)."},
+                "color": {"type": "string", "description": "green (default) or blue."},
+                "time": {"type": "number", "description": "Reference frame where the screen is fully visible, comp seconds (default 0)."},
+                "expand": {"type": "number", "description": "Push the corners outward by this many px (default 10)."},
+                "feature": {"type": "number", "description": "Tracker feature size px (default 56)."},
+                "search": {"type": "number", "description": "Tracker search size px (default 150)."}
+            })
+        },
+        required: &["layer", "content"],
+        read_only: false,
+    },
+    Def {
+        name: "render_before_after",
+        title: "Before / after",
+        description: "A contact sheet of the same frames with the effects of `layers` off (AVANT, top row) and on (APRES, bottom row), to judge a key, a track, a clean-up or a grade.",
+        props: || {
+            json!({
+                "layers": {"type": "array", "description": "Layers whose effects make the VFX (their fx switch is toggled)."},
+                "comp": {"description": "Composition (default: the active one)."},
+                "times": {"type": "array", "description": "Comp seconds (default: 3 spread over the work area)."},
+                "max_side": {"type": "integer", "description": "Longest side of each frame (default 420)."}
+            })
+        },
+        required: &["layers"],
+        read_only: true,
+    },
 ];
 
 pub fn is_ours(name: &str) -> bool {
@@ -295,6 +329,8 @@ pub fn run(p: &Proxy, name: &str, args: &Value) -> Value {
         "import_render" => import_render(p, args).map(|v| vec![text_content(&v)]),
         "vectorize_logo" => vectorize_logo(args).map(|v| vec![text_content(&v)]),
         "camera_from_blender" => camera_from_blender(p, args).map(|v| vec![text_content(&v)]),
+        "replace_screen" => replace_screen(p, args).map(|v| vec![text_content(&v)]),
+        "render_before_after" => render_before_after(p, args),
         _ => Err(format!("unknown tool {name}")),
     };
     match r {
@@ -1047,6 +1083,144 @@ fn camera_from_blender(p: &Proxy, a: &Value) -> Result<Value, String> {
         "size": [data.get("width"), data.get("height")], "markers": nulls,
         "hint": "To put a title in the scene: layer.newText, layer.setSwitch threeD, then either set transform/position to a marker's coordinates or layer.setParent {layers, parent: <marker null>} and set its position to [0,0,0] relative offset. 1 Blender metre = `scale` px at depth 0; keep the comp's time 0 = Blender frame_start.",
     }))
+}
+
+// ---- VFX on footage ----
+
+/// Corners (top-left, top-right, bottom-left, bottom-right) of the largest chroma area of `img`
+/// ("green" or "blue"), sampled every other pixel; `None` when too few pixels match.
+fn chroma_quad(img: &image::RgbaImage, color: &str) -> Option<[[f64; 2]; 4]> {
+    let blue = color.eq_ignore_ascii_case("blue");
+    let mut pts: Vec<(i64, i64)> = vec![];
+    for y in (0..img.height()).step_by(2) {
+        for x in (0..img.width()).step_by(2) {
+            let p = img.get_pixel(x, y);
+            let (r, g, b) = (i64::from(p[0]), i64::from(p[1]), i64::from(p[2]));
+            let hit = if blue { b > r + 45 && b > g + 30 } else { g > r + 45 && g > b + 45 };
+            if hit {
+                pts.push((i64::from(x), i64::from(y)));
+            }
+        }
+    }
+    if pts.len() < 200 {
+        return None;
+    }
+    let pick = |f: &dyn Fn(&(i64, i64)) -> i64, max: bool| -> [f64; 2] {
+        let p = if max { pts.iter().max_by_key(|p| f(p)) } else { pts.iter().min_by_key(|p| f(p)) };
+        p.map(|p| [p.0 as f64, p.1 as f64]).unwrap_or([0.0, 0.0])
+    };
+    Some([pick(&|p| p.0 + p.1, false), pick(&|p| p.0 - p.1, true), pick(&|p| p.0 - p.1, false), pick(&|p| p.0 + p.1, true)])
+}
+
+/// Whether the layer is placed 1:1 on the comp (so comp pixels = layer pixels for the tracker).
+fn layer_is_identity(p: &Proxy, layer: &Value, w: f64, h: f64) -> Result<bool, String> {
+    let get = |path: &str| -> Result<Vec<f64>, String> {
+        let r = json_of(&p.call("get_property", json!({"layer": layer, "path": path}))?);
+        Ok(numbers(r.get("value").unwrap_or(&Value::Null)).unwrap_or_default())
+    };
+    let (pos, scale, anchor) = (get("transform/position")?, get("transform/scale")?, get("transform/anchor")?);
+    let near = |a: Option<&f64>, b: f64| a.is_some_and(|a| (a - b).abs() < 0.5);
+    Ok(near(scale.first(), 100.0)
+        && near(scale.get(1), 100.0)
+        && near(pos.first(), w / 2.0)
+        && near(pos.get(1), h / 2.0)
+        && near(anchor.first(), w / 2.0)
+        && near(anchor.get(1), h / 2.0))
+}
+
+fn replace_screen(p: &Proxy, a: &Value) -> Result<Value, String> {
+    if let Some(c) = a_str(a, "comp") {
+        p.call("command_run", json!({"id": "comp.open", "params": {"comp": c}}))?;
+    }
+    let layer = a.get("layer").cloned().ok_or("replace_screen: `layer` (the footage layer) is required")?;
+    let content = a.get("content").cloned().ok_or("replace_screen: `content` (comp, footage item or layer) is required")?;
+    let color = a_str(a, "color").unwrap_or("green");
+    let t = num(a, "time").unwrap_or(0.0);
+    let expand = num(a, "expand").unwrap_or(10.0);
+    let feature = num(a, "feature").unwrap_or(56.0);
+    let search = num(a, "search").unwrap_or(150.0);
+    let comp = json_of(&p.call("get_comp", json!({}))?);
+    let (w, h) = (comp.get("width").and_then(Value::as_f64).unwrap_or(0.0), comp.get("height").and_then(Value::as_f64).unwrap_or(0.0));
+    if !layer_is_identity(p, &layer, w, h)? {
+        return Err("replace_screen: the footage layer must fill the comp 1:1 (scale 100 %, centred, comp size = footage size). Make a comp from the footage (its 'plan' comp), replace the screen there, then nest it in the delivery comp.".into());
+    }
+    // Find the screen on the reference frame (full resolution).
+    let shot = image_of(&p.call("render_frame", json!({"time": t, "max_side": w.max(h) as i64}))?)?;
+    let q = chroma_quad(&shot, color).ok_or_else(|| format!("replace_screen: no {color} screen found at {t} s"))?;
+    // The content goes under the footage; add it when it is an item rather than a layer of this comp.
+    let names: Vec<String> =
+        comp.get("layers").and_then(Value::as_array).into_iter().flatten().filter_map(|l| l.get("name").and_then(Value::as_str).map(str::to_string)).collect();
+    let content_layer = match content.as_str() {
+        Some(n) if names.iter().any(|x| x == n) => json!(n),
+        _ => {
+            p.call("command_run", json!({"id": "layer.addItem", "params": {"item": content, "index": 1}}))?;
+            top_layer_id(p)?
+        }
+    };
+    p.call("command_run", json!({"id": "layer.arrange", "params": {"layers": [content_layer], "to": "back"}}))?;
+    let tracker = json_of(&p.call("command_run", json!({"id": "track.new", "params": {"layer": layer, "kind": "perspective", "target": content_layer}}))?);
+    let offsets = [[-expand, -expand], [expand, -expand], [-expand, expand], [expand, expand]];
+    for (i, (c, off)) in q.iter().zip(offsets).enumerate() {
+        p.call(
+            "command_run",
+            json!({"id": "track.setPoint", "params": {"layer": layer, "point": i + 1, "center": c, "featureSize": [feature, feature], "searchSize": [search, search], "attachOffset": off, "time": t}}),
+        )?;
+    }
+    let mut analysed = json!(null);
+    for dir in ["forward", "backward"] {
+        if dir == "backward" && t <= 0.0 {
+            continue;
+        }
+        analysed = json_of(&p.call("command_run", json!({"id": "track.analyze", "params": {"layer": layer, "direction": dir, "wait": true}}))?);
+    }
+    p.call("command_run", json!({"id": "track.apply", "params": {"layer": layer}}))?;
+    // Key the screen colour out of the footage, sampled at the screen's centre.
+    let fx = json_of(&p.call("add_effect", json!({"layer": layer, "effect": "Key Light", "values": {}}))?);
+    let idx = fx.get("index").cloned().unwrap_or(json!(1));
+    let centre = [(q[0][0] + q[3][0]) / 2.0, (q[0][1] + q[3][1]) / 2.0];
+    p.call("command_run", json!({"id": "effect.pickColor", "params": {"layer": layer, "effect": idx, "param": "screenColour", "x": centre[0], "y": centre[1], "average": true, "time": t}}))?;
+    for (path, v) in [("screenMatte/clipBlack", 12.0), ("screenMatte/clipWhite", 88.0), ("screenMatte/screenShrinkGrow", -0.5)] {
+        p.call("set_property", json!({"layer": layer, "path": format!("effects/#{idx}/{path}"), "value": v}))?;
+    }
+    Ok(json!({
+        "screen": {"topLeft": q[0], "topRight": q[1], "bottomLeft": q[2], "bottomRight": q[3], "time": t},
+        "tracker": tracker, "analysis": analysed, "content": content_layer, "keyEffect": idx,
+        "hint": "Check with render_before_after {layers: [<footage layer>]} and render_filmstrip; widen `expand` if a coloured rim shows, lower it if content spills past the bezel.",
+    }))
+}
+
+fn render_before_after(p: &Proxy, a: &Value) -> Result<Vec<Value>, String> {
+    let info = comp_info(p, a)?;
+    if a.get("comp").is_some() {
+        p.call("command_run", json!({"id": "comp.open", "params": {"comp": info.id}}))?;
+    }
+    let layers = a
+        .get("layers")
+        .and_then(Value::as_array)
+        .cloned()
+        .filter(|l| !l.is_empty())
+        .ok_or("render_before_after: `layers` (whose effects make the VFX) is required")?;
+    let times: Vec<f64> = match a.get("times").and_then(Value::as_array) {
+        Some(t) => t.iter().filter_map(Value::as_f64).collect(),
+        None => (0..3).map(|i| snap(info.work.0 + (info.work.1 - info.work.0) * (0.15 + 0.35 * f64::from(i)), info.fps)).collect(),
+    };
+    let max_side = int(a, "max_side", 420, 96, 1200);
+    let mut before = vec![];
+    let mut after = vec![];
+    let fx = |on: bool| p.call("command_run", json!({"id": "layer.setSwitch", "params": {"layers": layers, "switch": "fx", "value": on}}));
+    for &t in &times {
+        fx(false)?;
+        let b = image_of(&p.call("render_frame", json!({"comp": info.id, "time": t, "max_side": max_side}))?);
+        fx(true)?;
+        let b = b?;
+        let c = image_of(&p.call("render_frame", json!({"comp": info.id, "time": t, "max_side": max_side}))?)?;
+        before.push(draw::Cell { image: b, caption: format!("AVANT {t:.2}S") });
+        after.push(draw::Cell { image: c, caption: format!("APRES {t:.2}S") });
+    }
+    let n = times.len() as u32;
+    before.extend(after);
+    let sheet = draw::filmstrip(&before, n.max(1), false, &format!("{} AVANT / APRES", info.name));
+    Ok(vec![text_content(&json!({"comp": info.id, "times": times, "layers": layers})), image_content(&sheet)?])
 }
 
 #[cfg(test)]
