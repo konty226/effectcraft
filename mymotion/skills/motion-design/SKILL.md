@@ -73,6 +73,11 @@ Dossiers du projet : `3d/` (.blend), `renders/` (séquences), `footage/` (plans 
    orienté comme les ombres du plan, `setup_render` puis rendu en arrière-plan ; `import_render {path, comp: <plan>}`
    (mettre les calques à l'échelle si le rendu est plus petit que le plan), flou léger + grain pour coller au plan.
    Vérifie que l'objet est dans le cadre du début à la fin (aperçus Blender à 3 instants) et qu'il reste « collé » au sol.
+   **Lumière** : relève la direction ET la longueur des ombres du plan (voitures, poteaux) et oriente le soleil pour
+   les reproduire (ombres courtes = soleil haut, ~60°) ; matériau moins miroir en plein jour ; étalonnage d'intégration
+   sur la beauty : Levels (`outBlack` ≈ 0,05 pour le voile), Hue/Saturation (−10 à −20), flou ≈ 1 px, grain.
+   **Apparition** : un objet peut « surgir du sol » en animant son Z depuis sous le sol : l'attrapeur d'ombres masque
+   la partie enterrée. Place-le à l'endroit du sol vu au centre de l'image vers les 3/4 du plan pour qu'il reste cadré.
 7. **Contrôle** : `render_filmstrip` sur la comp ; vérifie le **contraste objet/fond** (un logo bleu sur fond
    bleu se perd : faces plus claires ou chromées, fond assombri derrière), le cadrage dans les safe areas et
    le contact au sol (ombre).
