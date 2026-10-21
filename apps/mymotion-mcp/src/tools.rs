@@ -960,7 +960,7 @@ fn import_render(p: &Proxy, a: &Value) -> Result<Value, String> {
     let mut multiply = |label: &str, layer_name: &str, opacity: f64| -> Result<(), String> {
         p.call("command_run", json!({"id": "layer.addItem", "params": {"item": item, "index": 1}}))?;
         let id = top_layer_id(p)?;
-        p.call("add_effect", json!({"layer": id, "effect": "EXtractoR", "values": {"red": format!("{layer_name}.R"), "green": format!("{layer_name}.G"), "blue": format!("{layer_name}.B")}}))?;
+        p.call("add_effect", json!({"layer": id, "effect": "EXtractoR", "values": {"red": format!("{layer_name}.R"), "green": format!("{layer_name}.G"), "blue": format!("{layer_name}.B"), "alpha": ""}}))?;
         p.call("command_run", json!({"id": "layer.setBlendMode", "params": {"layers": [id], "mode": "Multiply"}}))?;
         p.call("set_property", json!({"layer": id, "path": "transform/opacity", "value": opacity}))?;
         p.call("command_run", json!({"id": "layer.rename", "params": {"layer": id, "name": format!("{base} {label}")}}))?;
